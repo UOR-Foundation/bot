@@ -1,0 +1,43 @@
+name: Build Invariant Knowledge Base
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "content/**/*.pdf"
+  workflow_dispatch:
+
+jobs:
+  generate-cbor:
+    runs-on: ubuntu-latest
+    env:
+      # If you choose to use an API (like OpenAI) for embeddings, set your key here:
+      # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: .github/scripts
+
+      - name: Run embed.js to generate knowledge.cbor
+        run: node embed.js
+        working-directory: .github/scripts
+
+      - name: Copy generated file to public folder
+        run: |
+          mkdir -p public
+          cp .github/scripts/knowledge.cbor public/
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
