@@ -9,33 +9,51 @@ on:
   workflow_dispatch:
 
 jobs:
-  generate-cbor:
+  build-knowledge:
+    name: Build Knowledge Base
     runs-on: ubuntu-latest
-    env:
-      # If you choose to use an API (like OpenAI) for embeddings, set your key here:
-      # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
-      - name: Checkout repository
+      # Checkout the repository
+      - name: Checkout Repository
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
+      # Setup Node.js environment with version 18 (to meet dependency engine requirements)
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '16'
+          node-version: '18'
 
-      - name: Install dependencies
-        run: npm install
-        working-directory: .github/scripts
+      # Ensure a package.json exists at the repository root to allow npm install.
+      - name: Ensure package.json exists
+        run: |
+          if [ ! -f package.json ]; then
+            echo '{}' > package.json
+          fi
 
+      # Install embed-specific dependencies explicitly.
+      - name: Install embed dependencies
+        run: npm install pdf-parse cbor @xenova/transformers
+
+      # Run embed.js to process PDFs and generate the invariant knowledge base (knowledge.cbor)
       - name: Run embed.js to generate knowledge.cbor
-        run: node embed.js
-        working-directory: .github/scripts
+        run: node .github/scripts/embed.js
 
+      # Copy the generated knowledge.cbor to the public folder for deployment.
       - name: Copy generated file to public folder
         run: |
           mkdir -p public
-          cp .github/scripts/knowledge.cbor public/
+          cp .github/scripts/knowledge.cbor public/knowledge.cbor
 
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build-knowledge
+    steps:
+      # Checkout repository for deployment job
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # Deploy the public folder (with knowledge.cbor) to GitHub Pages
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:

@@ -1,9 +1,32 @@
 // embed.js
+
 const fs = require('fs');
 const path = require('path');
-const pdfParse = require('pdf-parse');
-const cbor = require('cbor');
-const { pipeline } = require('@xenova/transformers');
+
+let pdfParse;
+try {
+  pdfParse = require('pdf-parse');
+} catch (error) {
+  console.error("Error: Module 'pdf-parse' is not installed. Please run 'npm install pdf-parse' in the repository root.");
+  process.exit(1);
+}
+
+let cbor;
+try {
+  cbor = require('cbor');
+} catch (error) {
+  console.error("Error: Module 'cbor' is not installed. Please run 'npm install cbor' in the repository root.");
+  process.exit(1);
+}
+
+let transformersPipeline;
+try {
+  // Destructure the pipeline function from the transformers package.
+  ({ pipeline: transformersPipeline } = require('@xenova/transformers'));
+} catch (error) {
+  console.error("Error: Module '@xenova/transformers' is not installed. Please run 'npm install @xenova/transformers' in the repository root.");
+  process.exit(1);
+}
 
 /**
  * Reads a PDF file and extracts its text.
@@ -86,7 +109,7 @@ async function processPDF(filePath, embedPipe) {
 async function main() {
   console.log("Loading embedding model...");
   // Load the feature-extraction pipeline using the free Xenova model.
-  const embedPipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+  const embedPipe = await transformersPipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
   console.log("Embedding model loaded.");
 
   // Adjust the content directory path as needed.
