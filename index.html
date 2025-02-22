@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Self-Contained Chatbot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Basic styling -->
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f4f4f4;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #fff;
+      min-height: 90vh;
+      display: flex;
+      flex-direction: column;
+    }
+    #chat-log {
+      flex: 1;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    .message {
+      margin: 5px 0;
+      padding: 8px;
+      border-radius: 5px;
+    }
+    .user-message {
+      background: #dcf8c6;
+      text-align: right;
+    }
+    .bot-message {
+      background: #f1f0f0;
+      text-align: left;
+    }
+    #input-area {
+      display: flex;
+    }
+    #user-input {
+      flex: 1;
+      padding: 10px;
+      font-size: 1em;
+    }
+    #send-btn {
+      padding: 10px 20px;
+      font-size: 1em;
+      background: #007bff;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+    }
+    #send-btn:hover {
+      background: #0056b3;
+    }
+    #file-input {
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Chatbot</h1>
+    <!-- Chat log display -->
+    <div id="chat-log"></div>
+    <!-- Input area for text messages -->
+    <div id="input-area">
+      <input type="text" id="user-input" placeholder="Ask a question...">
+      <button id="send-btn">Send</button>
+    </div>
+    <!-- File input for user-uploaded PDFs -->
+    <div>
+      <label for="file-input">Upload PDF to add to memory:</label>
+      <input type="file" id="file-input" accept=".pdf">
+    </div>
+  </div>
+
+  <!-- Include PDF.js for in-browser PDF parsing -->
+  <script src="https://mozilla.github.io/pdf.js/build/pdf.js"></script>
+  <!-- Include a CBOR decoder library -->
+  <script src="https://cdn.jsdelivr.net/npm/cbor-web@2.0.3/dist/cbor.min.js"></script>
+  <!-- Include Transformers.js to enable in-browser embedding -->
+  <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers/dist/transformers.min.js"></script>
+  <!-- Main chatbot logic -->
+  <script type="module" src="index.js"></script>
+</body>
+</html>
