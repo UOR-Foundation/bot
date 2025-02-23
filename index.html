@@ -2,24 +2,43 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <title>Self-Contained Chatbot</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Manifest for PWA support -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="description" content="A self-contained browser chatbot using PDFs, IndexedDB, sql.js, PDF.js, and Transformers.js for an interactive Q&A experience.">
   <!-- Basic styling -->
   <style>
+    :root {
+      --primary-color: #007bff;
+      --primary-color-dark: #0056b3;
+      --user-bg: #dcf8c6;
+      --bot-bg: #f1f0f0;
+      --font-family: Arial, sans-serif;
+    }
     body {
-      font-family: Arial, sans-serif;
       margin: 0;
       padding: 0;
+      font-family: var(--font-family);
       background: #f4f4f4;
+      color: #333;
     }
     .container {
       max-width: 800px;
-      margin: 0 auto;
+      margin: auto;
       padding: 20px;
       background: #fff;
       min-height: 90vh;
       display: flex;
       flex-direction: column;
+    }
+    header, footer {
+      text-align: center;
+      padding: 10px;
+    }
+    main {
+      flex: 1;
     }
     #chat-log {
       flex: 1;
@@ -27,68 +46,121 @@
       border: 1px solid #ddd;
       padding: 10px;
       margin-bottom: 10px;
+      background: #fafafa;
     }
     .message {
       margin: 5px 0;
       padding: 8px;
       border-radius: 5px;
+      max-width: 80%;
+      word-wrap: break-word;
     }
     .user-message {
-      background: #dcf8c6;
+      background: var(--user-bg);
+      align-self: flex-end;
       text-align: right;
     }
     .bot-message {
-      background: #f1f0f0;
+      background: var(--bot-bg);
+      align-self: flex-start;
       text-align: left;
     }
     #input-area {
       display: flex;
+      margin-bottom: 10px;
     }
     #user-input {
       flex: 1;
       padding: 10px;
       font-size: 1em;
+      border: 1px solid #ccc;
+      border-radius: 4px;
     }
     #send-btn {
       padding: 10px 20px;
       font-size: 1em;
-      background: #007bff;
-      color: #fff;
       border: none;
+      background: var(--primary-color);
+      color: #fff;
+      margin-left: 10px;
+      border-radius: 4px;
       cursor: pointer;
+      transition: background 0.3s ease;
     }
     #send-btn:hover {
-      background: #0056b3;
+      background: var(--primary-color-dark);
+    }
+    #file-input-container {
+      margin-top: 10px;
+      text-align: center;
     }
     #file-input {
-      margin-top: 10px;
+      margin-top: 5px;
+    }
+    /* Responsive adjustments */
+    @media (max-width: 600px) {
+      #send-btn {
+        padding: 10px;
+        font-size: 0.9em;
+      }
+      #user-input {
+        font-size: 0.9em;
+      }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Chatbot</h1>
-    <!-- Chat log display -->
-    <div id="chat-log"></div>
-    <!-- Input area for text messages -->
-    <div id="input-area">
-      <input type="text" id="user-input" placeholder="Ask a question...">
-      <button id="send-btn">Send</button>
-    </div>
-    <!-- File input for user-uploaded PDFs -->
-    <div>
-      <label for="file-input">Upload PDF to add to memory:</label>
-      <input type="file" id="file-input" accept=".pdf">
-    </div>
+    <header>
+      <h1>Chatbot</h1>
+      <p>A self-contained browser chatbot using PDFs, SQL.js, PDF.js, and Transformers.js</p>
+    </header>
+    <main>
+      <div id="chat-log" aria-live="polite" aria-label="Chat log"></div>
+      <div id="input-area">
+        <input type="text" id="user-input" placeholder="Ask a question..." aria-label="User input">
+        <button id="send-btn" aria-label="Send">Send</button>
+      </div>
+      <div id="file-input-container">
+        <label for="file-input">Upload PDF to add to memory:</label>
+        <input type="file" id="file-input" accept=".pdf" aria-label="PDF Upload">
+      </div>
+    </main>
+    <footer>
+      <small>&copy; 2025 Self-Contained Chatbot. All rights reserved.</small>
+    </footer>
   </div>
 
-  <!-- Include PDF.js for in-browser PDF parsing -->
-  <script src="https://mozilla.github.io/pdf.js/build/pdf.js"></script>
-  <!-- Include a CBOR decoder library -->
-  <script src="https://cdn.jsdelivr.net/npm/cbor-web@2.0.3/dist/cbor.min.js"></script>
-  <!-- Include Transformers.js to enable in-browser embedding -->
-  <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers/dist/transformers.min.js"></script>
+  <!-- Load PDF.js from cdnjs with defer -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.14.305/pdf.min.js" defer></script>
+  <!-- Configure PDF.js worker after pdf.min.js has loaded -->
+  <script defer>
+    window.addEventListener('DOMContentLoaded', () => {
+      // Ensure pdfjsLib is available before setting workerSrc
+      if (window.pdfjsLib) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.14.305/pdf.worker.min.js';
+      } else {
+        console.error("pdfjsLib is not available.");
+      }
+    });
+  </script>
+  <!-- Load sql.js for SQLite in the browser -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js" defer></script>
   <!-- Main chatbot logic -->
   <script type="module" src="index.js"></script>
+  <!-- Service worker registration for PWA support -->
+  <script defer>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('service-worker.js')
+          .then(registration => {
+            console.log('ServiceWorker registration successful with scope: ', registration.scope);
+          })
+          .catch(err => {
+            console.error('ServiceWorker registration failed: ', err);
+          });
+      });
+    }
+  </script>
 </body>
 </html>

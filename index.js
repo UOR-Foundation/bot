@@ -1,248 +1,324 @@
-// index.js
-// Self-contained chatbot logic for GitHub Pages
-// Uses IndexedDB to store the invariant knowledge base (from CBOR), user-uploaded documents, and chat history.
-// Utilizes Transformers.js for in-browser embedding and question-answering, and PDF.js for parsing uploaded PDFs.
+/**
+ * index.js – Refactored Chatbot Implementation
+ *
+ * This script sets up an in‑browser SQLite database (via sql.js) to store documents and chat messages,
+ * uses PDF.js to extract text from PDFs, and uses Transformers.js for computing text embeddings.
+ * It also implements a chat UI that synthesizes coherent responses.
+ *
+ * Note: Ensure that sql-wasm.js is loaded via a <script> tag in your index.html so that the global
+ * function initSqlJs is available.
+ */
 
-// --------------------------
-// IndexedDB Initialization
-// --------------------------
-const DB_NAME = 'ChatbotDB';
-const DB_VERSION = 1;
-let db;
+// --- Global Fetch Override ---
+// Redirect any local model requests to Hugging Face Hub.
+const originalFetch = window.fetch;
+window.fetch = (input, init) => {
+  if (typeof input === "string" && input.includes("/models/Xenova/all-MiniLM-L6-v2/")) {
+    input = input.replace(
+      /\/models\/Xenova\/all-MiniLM-L6-v2/,
+      "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main"
+    );
+  }
+  return originalFetch(input, init);
+};
 
-function initDB() {
+// --- Import Transformers Pipeline ---
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.11.0";
+
+// ============================================================
+// Database Helpers
+// ============================================================
+const DB_NAME = "ChatbotDB";
+const STORE_NAME = "sqliteFile";
+const KEY_NAME = "dbFile";
+
+let db = null; // SQL.Database instance
+
+function openIDB() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onerror = (event) => {
+      console.error("IndexedDB error", event);
+      reject(event);
+    };
     request.onupgradeneeded = (event) => {
-      db = event.target.result;
-      db.createObjectStore('knowledge', { keyPath: 'id' });
-      db.createObjectStore('documents', { keyPath: 'id', autoIncrement: true });
-      db.createObjectStore('history', { autoIncrement: true });
+      const idb = event.target.result;
+      if (!idb.objectStoreNames.contains(STORE_NAME)) {
+        idb.createObjectStore(STORE_NAME);
+      }
     };
     request.onsuccess = (event) => {
-      db = event.target.result;
-      console.log('IndexedDB initialized');
-      resolve();
-    };
-    request.onerror = (event) => {
-      console.error('IndexedDB error:', event.target.error);
-      reject(event.target.error);
+      resolve(event.target.result);
     };
   });
 }
 
-// --------------------------
-// Load Knowledge Base (CBOR)
-// --------------------------
-async function loadKnowledgeBase() {
+function saveDBToIDB(dbBinary) {
+  return openIDB().then((idb) => {
+    return new Promise((resolve, reject) => {
+      const tx = idb.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      const putRequest = store.put(dbBinary, KEY_NAME);
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = (e) => reject(e);
+    });
+  });
+}
+
+function loadDBFromIDB() {
+  return openIDB().then((idb) => {
+    return new Promise((resolve, reject) => {
+      const tx = idb.transaction(STORE_NAME, "readonly");
+      const store = tx.objectStore(STORE_NAME);
+      const getRequest = store.get(KEY_NAME);
+      getRequest.onsuccess = (e) => resolve(e.target.result);
+      getRequest.onerror = (e) => reject(e);
+    });
+  });
+}
+
+async function initDB() {
   try {
-    const response = await fetch('knowledge.cbor', { cache: "no-cache" });
-    if (!response.ok) throw new Error('Failed to fetch knowledge.cbor');
-    const arrayBuffer = await response.arrayBuffer();
-    // Decode CBOR using the globally available CBOR.decode (from cbor-web)
-    const KB_ITEMS = CBOR.decode(new Uint8Array(arrayBuffer));
-    const tx = db.transaction('knowledge', 'readwrite');
-    const store = tx.objectStore('knowledge');
-    store.clear();
-    KB_ITEMS.forEach((item, index) => {
-      if (!item.id) item.id = index;
-      store.put(item);
+    // Initialize SQL.js using the global initSqlJs (ensure sql-wasm.js is loaded via <script>)
+    const SQL = await window.initSqlJs({
+      locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
     });
-    await tx.complete;
-    console.log(`Loaded ${KB_ITEMS.length} knowledge items into IndexedDB`);
-  } catch (err) {
-    console.error('Error loading knowledge base:', err);
-  }
-}
-
-// --------------------------
-// Periodic Knowledge Base Update Check
-// --------------------------
-function setupPeriodicKBCheck() {
-  setInterval(async () => {
-    try {
-      const headResp = await fetch('knowledge.cbor', { method: 'HEAD' });
-      const remoteLastModified = headResp.headers.get('Last-Modified');
-      const lastModifiedStored = localStorage.getItem('KB_LastModified');
-      if (remoteLastModified && remoteLastModified !== lastModifiedStored) {
-        console.log('New knowledge base detected, updating...');
-        await loadKnowledgeBase();
-        localStorage.setItem('KB_LastModified', remoteLastModified);
-      }
-    } catch (err) {
-      console.warn('KB update check failed:', err);
+    const savedDB = await loadDBFromIDB();
+    if (savedDB) {
+      db = new SQL.Database(new Uint8Array(savedDB));
+      console.log("Database loaded from persistence.");
+    } else {
+      db = new SQL.Database();
+      console.log("New database created.");
+      db.run(`
+        CREATE TABLE IF NOT EXISTS Documents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          content TEXT,
+          embedding BLOB
+        );
+      `);
     }
-  }, 24 * 60 * 60 * 1000); // every 24 hours
-}
-
-// --------------------------
-// Chat UI Elements and History
-// --------------------------
-const chatLog = document.getElementById('chat-log');
-const userInputEl = document.getElementById('user-input');
-const sendBtn = document.getElementById('send-btn');
-const fileInput = document.getElementById('file-input');
-
-function appendMessage(role, text) {
-  const msgDiv = document.createElement('div');
-  msgDiv.className = role === 'user' ? 'user-message' : 'bot-message';
-  msgDiv.textContent = (role === 'user' ? "You: " : "Bot: ") + text;
-  chatLog.appendChild(msgDiv);
-  chatLog.scrollTop = chatLog.scrollHeight;
-  const tx = db.transaction('history', 'readwrite');
-  tx.objectStore('history').add({ role, text, timestamp: Date.now() });
-}
-
-function loadChatHistory() {
-  const tx = db.transaction('history', 'readonly');
-  const store = tx.objectStore('history');
-  const request = store.getAll();
-  request.onsuccess = () => {
-    const messages = request.result;
-    messages.forEach(msg => {
-      appendMessage(msg.role, msg.text);
-    });
-  };
-}
-
-// --------------------------
-// Embedding and Similarity Functions
-// --------------------------
-let embedder = null;
-async function embedText(text) {
-  if (!embedder) {
-    embedder = await window.transformers.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
-    console.log('Embedding model loaded');
+  } catch (error) {
+    console.error("Failed to initialize database:", error);
   }
-  const result = await embedder(text, { pooling: 'mean', normalize: true });
-  const embedding = result.data ? Array.from(result.data) : result.tolist()[0];
-  return embedding;
 }
 
-function cosineSimilarity(vecA, vecB) {
-  const dot = vecA.reduce((acc, val, i) => acc + val * vecB[i], 0);
-  const normA = Math.sqrt(vecA.reduce((acc, val) => acc + val * val, 0));
-  const normB = Math.sqrt(vecB.reduce((acc, val) => acc + val * val, 0));
-  return dot / (normA * normB);
+async function persistDB() {
+  try {
+    if (db) {
+      const binaryArray = db.export();
+      await saveDBToIDB(binaryArray);
+      console.log("Database persisted to IndexedDB.");
+    }
+  } catch (error) {
+    console.error("Failed to persist database:", error);
+  }
 }
 
-async function getAllChunks() {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(['knowledge', 'documents'], 'readonly');
-    const store1 = tx.objectStore('knowledge');
-    const store2 = tx.objectStore('documents');
-    let chunks = [];
-    const req1 = store1.getAll();
-    req1.onsuccess = () => {
-      chunks = chunks.concat(req1.result);
-      const req2 = store2.getAll();
-      req2.onsuccess = () => {
-        chunks = chunks.concat(req2.result);
-        resolve(chunks);
-      };
-      req2.onerror = () => reject(req2.error);
-    };
-    req1.onerror = () => reject(req1.error);
-  });
+// ============================================================
+// Model & Embedding Functions
+// ============================================================
+let extractor = null; // Cached Transformers pipeline
+
+async function embedText(text) {
+  try {
+    if (!extractor) {
+      extractor = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2", {
+        pooling: "mean",
+        normalize: true,
+        modelUrl: "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/",
+        localFiles: false
+      });
+      console.log("Embedding model loaded.");
+    }
+    const result = await extractor(text);
+    let embedding;
+    if (result.data) {
+      if (result.dims && result.dims[0] === 1) {
+        embedding = result.data;
+      } else {
+        embedding = result.data.slice(0, result.data.length / result.dims[0]);
+      }
+    } else {
+      throw new Error("Unexpected embedding result format.");
+    }
+    return embedding;
+  } catch (error) {
+    console.error("Embedding error:", error);
+    throw error;
+  }
 }
 
-async function retrieveRelevantChunks(queryEmbedding, topK = 3) {
-  const chunks = await getAllChunks();
-  const scored = chunks.map(item => {
-    if (!item.embedding) return { score: -Infinity, text: item.text };
-    const score = cosineSimilarity(queryEmbedding, item.embedding);
-    return { score, text: item.text };
+// ============================================================
+// Chat Logic & Synthesis
+// ============================================================
+
+// Insert a document (chat message or PDF page) into the database.
+async function insertDocument(text) {
+  try {
+    const embedding = await embedText(text);
+    const embeddingBlob = new Uint8Array(embedding.buffer);
+    const stmt = db.prepare("INSERT INTO Documents (content, embedding) VALUES (?, ?);");
+    stmt.bind([text, embeddingBlob]);
+    stmt.step();
+    stmt.free();
+    await persistDB();
+    console.log(`Inserted document: "${text}"`);
+  } catch (error) {
+    console.error("Error inserting document:", error);
+  }
+}
+
+// Search the database for documents similar to the query.
+async function searchDatabase(queryEmbedding) {
+  const results = db.exec("SELECT content, embedding FROM Documents;");
+  if (results.length === 0) return [];
+  const rows = results[0].values;
+  const scored = rows.map(row => {
+    const content = row[0];
+    const embeddingBlob = row[1];
+    const storedEmbedding = new Float32Array(embeddingBlob.buffer);
+    let dot = 0;
+    for (let i = 0; i < storedEmbedding.length; i++) {
+      dot += storedEmbedding[i] * queryEmbedding[i];
+    }
+    return { content, score: dot };
   });
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, topK);
+  return scored;
 }
 
-// --------------------------
-// QA Pipeline for Answer Generation
-// --------------------------
-let qaPipeline = null;
-async function answerQuery(question) {
-  if (!qaPipeline) {
-    qaPipeline = await window.transformers.pipeline('question-answering', 'Xenova/distilbert-base-uncased-distilled-squad');
-    console.log('QA model loaded');
-  }
-  const queryEmbedding = await embedText(question);
-  const topChunks = await retrieveRelevantChunks(queryEmbedding, 3);
-  if (topChunks.length === 0) {
-    return "I'm sorry, I don't have information on that.";
-  }
-  let context = topChunks.map(item => item.text).join('\n\n');
-  if (context.length > 10000) {
-    context = context.slice(0, 10000);
-  }
+// Synthesize a coherent answer. For "name" queries, extract a name from stored chat messages.
+// Otherwise, combine top unique matches into a conversational reply.
+async function answerQuery(userQuery) {
   try {
-    const result = await qaPipeline({ question: question, context: context });
-    const answer = result.answer || "";
-    return answer.length ? answer : "I couldn't find an answer.";
-  } catch (err) {
-    console.error('Error in QA pipeline:', err);
-    return "Sorry, something went wrong generating the answer.";
+    const queryEmbedding = await embedText(userQuery);
+    const scoredResults = await searchDatabase(queryEmbedding);
+    const SIMILARITY_THRESHOLD = 0.3;
+
+    // Special handling for "what is my name" queries.
+    if (/what.*name/i.test(userQuery)) {
+      for (const item of scoredResults) {
+        const match = item.content.match(/my name is\s+(\w+)/i);
+        if (match) {
+          return `Based on our conversation, your name appears to be ${match[1]}.`;
+        }
+      }
+    }
+
+    // Remove duplicate content and pick top unique matches.
+    const unique = [];
+    const seen = new Set();
+    for (const item of scoredResults) {
+      if (item.score < SIMILARITY_THRESHOLD) break;
+      if (!seen.has(item.content)) {
+        seen.add(item.content);
+        unique.push(item);
+      }
+      if (unique.length >= 3) break;
+    }
+    if (unique.length === 0) {
+      return "I'm sorry, I don't have enough context on that.";
+    }
+    // If there's one strong unique match, use it directly.
+    if (unique.length === 1 || unique[0].score > unique[1].score * 1.5) {
+      return `I recall you mentioned: "${unique[0].content}"`;
+    }
+    // Otherwise, synthesize a combined response.
+    const responses = unique.map((match, idx) => `(${idx + 1}) ${match.content}`);
+    return `Based on our conversation, here's what I gathered:\n${responses.join("; ")}`;
+  } catch (error) {
+    console.error("Error in answerQuery:", error);
+    return "An error occurred while processing your question.";
   }
 }
 
-// --------------------------
-// Chat Interaction Handling
-// --------------------------
-sendBtn.addEventListener('click', async () => {
-  const question = userInputEl.value.trim();
-  if (!question) return;
-  appendMessage('user', question);
-  userInputEl.value = '';
-  appendMessage('bot', '...');
-  const answer = await answerQuery(question);
-  chatLog.lastChild.textContent = "Bot: " + answer;
+// ============================================================
+// UI Handlers & Chat Interface
+// ============================================================
+document.addEventListener("DOMContentLoaded", async () => {
+  await initDB();
+
+  // PDF Upload Handler.
+  const fileInput = document.getElementById("file-input");
+  if (fileInput) {
+    fileInput.addEventListener("change", async (e) => {
+      const files = e.target.files;
+      await loadKnowledgeBase(files);
+    });
+  } else {
+    console.warn("File input element not found.");
+  }
+
+  // Chat Interface Handler.
+  const sendButton = document.getElementById("send-btn");
+  const userInput = document.getElementById("user-input");
+  const chatLog = document.getElementById("chat-log");
+
+  if (sendButton && userInput && chatLog) {
+    sendButton.addEventListener("click", async () => {
+      const query = userInput.value.trim();
+      if (!query) return;
+      
+      // Display and store the user message.
+      const userMsg = document.createElement("div");
+      userMsg.classList.add("message", "user-message");
+      userMsg.textContent = "User: " + query;
+      chatLog.appendChild(userMsg);
+      await insertDocument(query);
+      
+      // Get the bot's answer.
+      const answer = await answerQuery(query);
+      await insertDocument(answer);
+      
+      // Display the bot's message.
+      const botMsg = document.createElement("div");
+      botMsg.classList.add("message", "bot-message");
+      botMsg.textContent = "Bot: " + answer;
+      chatLog.appendChild(botMsg);
+      
+      userInput.value = "";
+      chatLog.scrollTop = chatLog.scrollHeight;
+    });
+  } else {
+    console.error("One or more UI elements (send button, user input, chat log) not found.");
+  }
+
+  window.addEventListener("beforeunload", persistDB);
 });
 
-
-// --------------------------
-// PDF Upload Handling for User Documents
-// --------------------------
-fileInput.addEventListener('change', async () => {
-  const files = Array.from(fileInput.files);
-  for (const file of files) {
+// ============================================================
+// PDF Knowledge Base Loader
+// ============================================================
+async function loadKnowledgeBase(sourceFiles) {
+  if (!sourceFiles || sourceFiles.length === 0) {
+    console.warn("No files provided to load into the knowledge base.");
+    return;
+  }
+  for (let i = 0; i < sourceFiles.length; i++) {
+    const file = sourceFiles[i];
+    if (file.type !== "application/pdf") {
+      console.warn(`File ${file.name} is not a PDF. Skipping.`);
+      continue;
+    }
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      let fullText = "";
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items.map(item => item.str).join(' ');
-        fullText += "\n" + pageText;
+      const fileBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: fileBuffer }).promise;
+      console.log(`Loaded PDF ${file.name} with ${pdf.numPages} pages.`);
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        try {
+          const page = await pdf.getPage(pageNum);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map(item => item.str).join(" ");
+          if (pageText.trim().length === 0) continue;
+          await insertDocument(pageText);
+          console.log(`Indexed page ${pageNum} of ${file.name}.`);
+        } catch (pageError) {
+          console.warn(`Error processing page ${pageNum} of ${file.name}:`, pageError);
+        }
       }
-      const chunkSize = 1000;
-      const chunks = [];
-      for (let i = 0; i < fullText.length; i += chunkSize) {
-        chunks.push(fullText.slice(i, i + chunkSize));
-      }
-      const tx = db.transaction('documents', 'readwrite');
-      const docStore = tx.objectStore('documents');
-      for (const chunk of chunks) {
-        const embedding = await embedText(chunk);
-        docStore.add({ text: chunk, embedding: embedding, source: file.name });
-      }
-      await tx.complete;
-      console.log(`Processed and stored ${chunks.length} chunks from ${file.name}`);
-      alert(`File "${file.name}" processed successfully.`);
-    } catch (error) {
-      console.error('Error processing uploaded PDF:', error);
-      alert(`Error processing file "${file.name}". See console for details.`);
+    } catch (pdfError) {
+      console.error(`Failed to load PDF ${file.name}:`, pdfError);
     }
   }
-});
-
-// --------------------------
-// Initialize App on Page Load
-// --------------------------
-(async function initApp() {
-  await initDB();
-  loadChatHistory();
-  await loadKnowledgeBase();
-  setupPeriodicKBCheck();
-  console.log('Chatbot app initialized.');
-})();
+}
