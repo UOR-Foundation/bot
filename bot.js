@@ -1,295 +1,141 @@
-/**
- * bot.js - Core chatbot implementation that uses bot1.js cognitive layer
- * This version calls into bot1.js for structured knowledge and reasoning
- */
+// bot.js
+// Bot implementation based on UOR framework
+// Handles user interaction, knowledge retrieval, and response generation
 
-// Import bot1's cognitive capabilities
-import {
-    initBot as initBot1,
-    analyzeInput,
-    storeAxioms,
-    retrieveContext,
-    checkContradiction,
-    verifyResponse,
-    addExternalKnowledge,
-    ensureCoherence,
-    getEntityFacts,
-    getExternalInfo,
-    storeExternalInfo,
-    persistKnowledgeBase
-  } from './bot1.js';
-  
-  // Load Transformers.js
-  import { pipeline } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.11.0";
-  
-  // Global state
-  let generator = null;
-  let isInitialized = false;
-  
-  /**
-   * Initialize the chatbot
-   */
-  export async function initBot() {
-    if (isInitialized) return;
-    
-    try {
-      console.log("Initializing chatbot...");
-      
-      // Initialize bot1's cognitive layer first
-      await initBot1();
-      
-      // Initialize the text generation model 
-      generator = await pipeline('text-generation', 'Xenova/gpt2', {
-        quantized: true,
-        revision: 'main'
-      });
-  
-      isInitialized = true;
-      console.log("Chatbot initialization complete");
-    } catch (err) {
-      console.error("Failed to initialize chatbot:", err);
-      throw err;
-    }
+import UORCortex from './uor-cortex.js'; // Import UOR Cortex class to handle knowledge representation
+import { LogicEngine } from './semantics/logic.js'; // Import LogicEngine class
+
+class Bot {
+  constructor() {
+    this.uorCortex = new UORCortex(); // Initialize the UOR Cortex for knowledge representation
+    this.logicEngine = new LogicEngine(); // Initialize the LogicEngine
+    this.initBot(); // Initialize the bot
   }
-  
+
   /**
-   * Main message handler - uses bot1's cognitive capabilities
+   * Initializes the bot by setting up necessary components such as the UOR Cortex.
+   * @returns {void}
    */
-  export async function handleSendMessage(userInput) {
-    if (!isInitialized) {
-      throw new Error("Chatbot not initialized");
-    }
-  
+  async initBot() {
+    console.log("Bot initialization complete.");
+    // No other initial configuration is required for now since UOR framework is already in place
+  }
+
+  /**
+   * Handles user input, processes the query, and retrieves relevant knowledge from the UOR framework.
+   * This method performs knowledge resolution and applies logical inference to generate a response.
+   * @param {string} userQuery - The query input from the user.
+   * @returns {Promise<string>} - The generated response to the user.
+   */
+  async handleUserQuery(userQuery) {
     try {
-      // 1. Extract and process facts using bot1
-      const facts = await analyzeInput(userInput);
-      if (facts.length > 0) {
-        for (const fact of facts) {
-          const contradiction = await checkContradiction(fact);
-          if (contradiction) {
-            return constructClarificationRequest(fact, contradiction);
-          }
-          await storeAxioms([fact], "user");
-        }
-      }
-  
-      // 2. Handle special queries
-      if (isSpecialQuery(userInput)) {
-        return handleSpecialQuery(userInput);
-      }
-  
-      // 3. Get context from bot1
-      const context = await retrieveContext(userInput);
-  
-      // 4. Augment with external knowledge if needed
-      let augmentedContext = context;
-      if (shouldFetchExternalKnowledge(userInput, context)) {
-        const externalInfo = await fetchExternalContent(userInput);
-        if (externalInfo) {
-          augmentedContext = await addExternalKnowledge(context, externalInfo);
-        }
-      }
-  
-      // 5. Generate and verify response
-      const response = await generateResponse(userInput, augmentedContext);
-      
-      const verificationResult = await verifyResponse(response);
-      if (!verificationResult.isValid) {
-        return await generateResponse(userInput, augmentedContext, true);
-      }
-  
-      // 6. Store interaction
-      await storeAxioms([{
-        entity: 'conversation',
-        type: 'Interaction',
-        attribute: 'userInput',
-        value: userInput,
-        timestamp: Date.now()
-      }], 'conversation');
-  
+      // Step 1: Convert user query into a kernel representation
+      const queryKernel = this.convertQueryToKernel(userQuery);
+
+      // Step 2: Resolve the relevant content (kernels) based on the query
+      const relatedKernels = this.uorCortex.resolveContent(queryKernel);
+
+      // Step 3: Apply logical inference to the resolved content
+      const inferenceResults = this.applyLogicalInference(relatedKernels);
+
+      // Step 4: Generate a response based on the resolved and inferred knowledge
+      const response = this.generateResponse(inferenceResults);
+
+      // Step 5: Return the generated response to the user
       return response;
-  
-    } catch (err) {
-      console.error("Error handling message:", err);
-      return "I apologize, but I encountered an error. Could you try rephrasing that?";
+    } catch (error) {
+      console.error('Error processing query:', error);
+      return 'Sorry, there was an error processing your request.';
     }
   }
-  
+
   /**
-   * Generate a response using the context and query
+   * Converts a user query into a kernel representation.
+   * This transformation step allows the bot to understand the query as an object within the UOR framework.
+   * @param {string} userQuery - The user input query.
+   * @returns {Object} - The kernel object representing the user query.
    */
-  async function generateResponse(query, context, emphasizeFacts = false) {
-    const prompt = constructPrompt(query, context, emphasizeFacts);
+  convertQueryToKernel(userQuery) {
+    // Create a kernel from the user query (this could involve additional parsing or preprocessing)
+    const queryObject = { query: userQuery }; // Simple example; in real-world applications, more processing may be required
+    const { kernelReference, kernel } = this.uorCortex.createKernel(queryObject);
     
-    try {
-      const output = await generator(prompt, {
-        max_length: 200,
-        num_return_sequences: 1,
-        temperature: emphasizeFacts ? 0.3 : 0.7,
-        top_p: emphasizeFacts ? 0.85 : 0.9,
-        do_sample: true
-      });
-  
-      let response = Array.isArray(output) ? output[0].generated_text : output;
-      response = cleanResponse(response, prompt);
-      return response;
-  
-    } catch (err) {
-      console.error("Generation error:", err);
-      return "I apologize, but I couldn't generate a proper response.";
+    return kernel;
+  }
+
+  /**
+   * Applies logical inference to the resolved kernels.
+   * The inferred results are based on relationships, rules, and logic defined within the UOR framework.
+   * @param {Array} relatedKernels - The kernels retrieved during content resolution.
+   * @returns {Array} - The list of inference results based on logical reasoning.
+   */
+  applyLogicalInference(relatedKernels) {
+    // This method uses the logic engine to apply rules and infer new facts based on the retrieved kernels
+    return relatedKernels.map(kernel => this.logicEngine.applyInference(kernel)); // Apply inference to each kernel
+  }
+
+  /**
+   * Generates a response based on the inference results.
+   * The response is constructed by combining the original kernel data and any new insights gained from inference.
+   * @param {Array} inferenceResults - The list of inference results.
+   * @returns {string} - The final response to return to the user.
+   */
+  generateResponse(inferenceResults) {
+    // Combine the inferred knowledge to form a response (this could involve additional formatting, ranking, etc.)
+    if (inferenceResults.length === 0) {
+      return 'Sorry, I couldn\'t find any relevant information.';
+    }
+
+    // For simplicity, we join all inference results and return them as a response (custom response logic can be added)
+    const response = inferenceResults.map(result => result.data).join(' ');
+
+    return `Here is the information I found: ${response}`;
+  }
+
+  /**
+   * Function to traverse the UOR lattice and pack relevant context.
+   * This ensures the context is built incrementally and efficiently to stay within token limits.
+   * @param {string} userQuery - The user input query.
+   * @returns {Array} - The packed context for response generation.
+   */
+  async traverseUORLattice(query) {
+    // Ensure that the method is being called on this.uorCortex (instance of UORCortex)
+    if (this.uorCortex && typeof this.uorCortex.traverseUORLattice === 'function') {
+      return await this.uorCortex.traverseUORLattice(query); // Traverse the UOR lattice to collect relevant kernels
+    } else {
+      console.error('Error: traverseUORLattice method is not available on uorCortex');
+      return [];
     }
   }
-  
+
   /**
-   * Construct a prompt with appropriate context
+   * Function to aggregate kernels into a higher-level context.
+   * This ensures the context is synthesized into a more compact and coherent form.
+   * @param {Array} context - The context gathered from the lattice traversal.
+   * @returns {Array} - The aggregated higher-level context.
    */
-  function constructPrompt(query, context, emphasizeFacts) {
-    let prompt = '';
-    
-    if (context && context.trim()) {
-      prompt += 'Facts I Know:\n';
-      prompt += context;
-      prompt += '\n\n';
-      
-      if (emphasizeFacts) {
-        prompt += 'IMPORTANT: You must use the facts above in your response.\n\n';
-      }
-    }
-  
-    prompt += `User: ${query}\n`;
-    prompt += 'Assistant: ';
-    
-    return prompt;
+  aggregateContext(context) {
+    return this.uorCortex.aggregateContext(context); // Use the aggregation logic from UORCortex
   }
-  
+
   /**
-   * Clean and format the generated response
+   * Generates a response based on the higher-level context.
+   * This method applies all the necessary context aggregation and inference before generating the final output.
+   * @param {Array} packedContext - The higher-level context to pass to the transformer model.
+   * @returns {string} - The response generated by the transformer model.
    */
-  function cleanResponse(response, prompt) {
-    if (response.startsWith(prompt)) {
-      response = response.slice(prompt.length);
-    }
-    
-    response = response.split(/User:|Assistant:/)[0];
-    
-    return response.trim()
-      .replace(/\n+/g, ' ')
-      .replace(/\s+/g, ' ');
+  async generateResponse(packedContext) {
+    // Pass the packed context to the transformer model to generate a coherent response
+    const response = await transformerModel(packedContext, {
+      max_length: 200, // Adjust max length as needed
+      min_length: 50,  // Ensure responses aren't too short
+      num_return_sequences: 1, // Generate a single response
+      do_sample: true, // Use sampling for diversity
+      temperature: 0.7, // Control randomness (lower for more deterministic responses)
+    });
+
+    return response[0].generated_text; // Return the generated text as the response
   }
-  
-  /**
-   * Check if input is a special query
-   */
-  function isSpecialQuery(input) {
-    const specialPatterns = [
-      /what.*your name/i,
-      /who.*you/i,
-      /what.*my name/i,
-      /do you remember/i
-    ];
-    
-    return specialPatterns.some(pattern => pattern.test(input));
-  }
-  
-  /**
-   * Handle special queries
-   */
-  async function handleSpecialQuery(input) {
-    if (/what.*your name/i.test(input)) {
-      return "I'm an AI chatbot assistant.";
-    }
-    
-    if (/what.*my name/i.test(input)) {
-      const userFacts = await getEntityFacts('user');
-      const nameFact = userFacts.find(f => f.attribute === 'name');
-      return nameFact ? `Your name is ${nameFact.value}.` : "I'm not sure of your name yet.";
-    }
-    
-    return null;
-  }
-  
-  /**
-   * Determine if external knowledge should be fetched
-   */
-  function shouldFetchExternalKnowledge(query, context) {
-    if (/my|me|i am|i'm/i.test(query)) {
-      return false;
-    }
-    
-    const hasContext = context && context.split(' ').length > 20;
-    return !hasContext;
-  }
-  
-  /**
-   * Create a clarification request for contradictions
-   */
-  function constructClarificationRequest(newFact, existingFact) {
-    return `I notice a contradiction: earlier I learned that ${existingFact.entity} ${existingFact.attribute} is ${existingFact.value}, but now you're telling me it's ${newFact.value}. Which is correct?`;
-  }
-  
-  /**
-   * Fetch external content (Wikipedia)
-   */
-  async function fetchExternalContent(query) {
-    const cached = await getExternalInfo(query);
-    if (cached) return cached;
-  
-    try {
-      const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*`;
-      const response = await fetch(searchUrl);
-      const data = await response.json();
-  
-      if (data.query?.search?.length > 0) {
-        const pageId = data.query.search[0].pageid;
-        const contentUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&pageids=${pageId}&format=json&origin=*`;
-        
-        const contentResponse = await fetch(contentUrl);
-        const contentData = await contentResponse.json();
-        
-        const extract = contentData.query?.pages[pageId]?.extract;
-        if (extract) {
-          await storeExternalInfo(query, extract, 'wikipedia');
-          return extract;
-        }
-      }
-    } catch (err) {
-      console.warn("Error fetching from Wikipedia:", err);
-    }
-    
-    return '';
-  }
-  
-  /**
-   * Load PDFs into knowledge base
-   */
-  export async function loadPDFKnowledgeBase(files) {
-    if (!files?.length) return;
-    
-    for (const file of files) {
-      if (file.type !== 'application/pdf') continue;
-      
-      try {
-        const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-        
-        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-          const page = await pdf.getPage(pageNum);
-          const textContent = await page.getTextContent();
-          const pageText = textContent.items.map(item => item.str).join(' ');
-          
-          const facts = await analyzeInput(pageText);
-          if (facts.length > 0) {
-            await storeAxioms(facts, 'pdf');
-          }
-        }
-      } catch (err) {
-        console.error(`Error processing PDF ${file.name}:`, err);
-      }
-    }
-  }
-  
-  /**
-   * Persist state
-   */
-  export async function persist() {
-    await persistKnowledgeBase();
-  }
+}
+
+export default Bot; // Default export of the Bot class

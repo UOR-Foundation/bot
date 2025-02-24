@@ -127,7 +127,7 @@
       </div>
     </main>
     <footer>
-      <small>&copy; 2025 Self-Contained Chatbot. All rights reserved.</small>
+      <small>&copy; 2025 UOR Foundation. All rights reserved.</small>
     </footer>
   </div>
 
@@ -147,7 +147,13 @@
   <!-- Load sql.js for SQLite in the browser -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js" defer></script>
   <!-- Main chatbot logic -->
-  <script type="module" src="index.js"></script>
+  <script type="module" src="semantics/logic.js" defer></script>
+  <script type="module" src="knowledge/uor-database.js" defer></script>
+  <script type="module" src="knowledge/uor-schema.js" defer></script>
+  <script type="module" src="uor-cortex.js" defer></script>
+  <script type="module" src="bot.js"></script>
+
+  <script type="module" src="index.js" defer></script>
   <!-- Service worker registration for PWA support -->
   <script defer>
     if ('serviceWorker' in navigator) {
