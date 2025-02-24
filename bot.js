@@ -7,18 +7,66 @@ import { LogicEngine } from './semantics/logic.js'; // Import LogicEngine class
 
 class Bot {
   constructor() {
+    this.logger = console; // Initialize logger first
     this.uorCortex = new UORCortex(); // Initialize the UOR Cortex for knowledge representation
     this.logicEngine = new LogicEngine(); // Initialize the LogicEngine
-    this.initBot(); // Initialize the bot
+    this.initBot(); // Initialize the bot after logger is set
   }
 
   /**
    * Initializes the bot by setting up necessary components such as the UOR Cortex.
-   * @returns {void}
+   * @returns {Promise<void>}
    */
   async initBot() {
-    console.log("Bot initialization complete.");
-    // No other initial configuration is required for now since UOR framework is already in place
+    this.logger.log("Bot initialization complete.");
+    
+    // Add some sample kernels and relationships for testing purposes
+    this.initializeKnowledgeBase();
+  }
+
+  /**
+   * Initialize the knowledge base with some sample kernels
+   * This can be extended or replaced with real data in production
+   */
+  initializeKnowledgeBase() {
+    try {
+      // Create sample kernels about UOR and context management
+      const kernelUOR = this.uorCortex.createKernel({
+        title: "UOR Framework",
+        content: "The Universal Object Reference (UOR) framework provides a way to represent knowledge as a directed acyclic graph of interconnected kernels."
+      });
+      
+      const kernelTokenLimits = this.uorCortex.createKernel({
+        title: "Token Limits",
+        content: "Language models have token limits that constrain the amount of context they can process at once, requiring efficient context management."
+      });
+      
+      const kernelContextPacking = this.uorCortex.createKernel({
+        title: "Context Packing",
+        content: "Context packing involves selectively including relevant information within token limits while maintaining coherence and relevance."
+      });
+      
+      const kernelContextLevels = this.uorCortex.createKernel({
+        title: "Hierarchical Context",
+        content: "Organizing context into hierarchical levels based on relevance allows for more efficient use of token limits and better response quality."
+      });
+      
+      const kernelTraversal = this.uorCortex.createKernel({
+        title: "Lattice Traversal",
+        content: "Traversing the UOR lattice involves following relationships between kernels to build a rich context for response generation."
+      });
+      
+      // Link the kernels with relationships
+      this.uorCortex.linkObjects(kernelUOR.kernelReference, kernelTokenLimits.kernelReference, "relates_to");
+      this.uorCortex.linkObjects(kernelTokenLimits.kernelReference, kernelContextPacking.kernelReference, "requires");
+      this.uorCortex.linkObjects(kernelContextPacking.kernelReference, kernelContextLevels.kernelReference, "implements");
+      this.uorCortex.linkObjects(kernelContextLevels.kernelReference, kernelTraversal.kernelReference, "uses");
+      this.uorCortex.linkObjects(kernelUOR.kernelReference, kernelTraversal.kernelReference, "defines");
+      
+      this.logger.log("Knowledge base initialized with sample kernels and relationships");
+    } catch (error) {
+      this.logger.error("Error initializing knowledge base:", error);
+    }
   }
 
   /**
@@ -29,22 +77,26 @@ class Bot {
    */
   async handleUserQuery(userQuery) {
     try {
+      this.logger.log(`Processing user query: "${userQuery}"`);
+      
       // Step 1: Convert user query into a kernel representation
       const queryKernel = this.convertQueryToKernel(userQuery);
-
-      // Step 2: Resolve the relevant content (kernels) based on the query
-      const relatedKernels = this.uorCortex.resolveContent(queryKernel);
-
-      // Step 3: Apply logical inference to the resolved content
-      const inferenceResults = this.applyLogicalInference(relatedKernels);
-
-      // Step 4: Generate a response based on the resolved and inferred knowledge
-      const response = this.generateResponse(inferenceResults);
-
-      // Step 5: Return the generated response to the user
+      
+      // Step 2: Traverse the UOR lattice to build a rich context
+      const packedContext = await this.traverseUORLattice(queryKernel);
+      
+      // Step 3: Apply logical inference to the packed context
+      const inferenceResults = this.applyLogicalInference(packedContext);
+      
+      // Step 4: Aggregate the context into a higher-level representation
+      const higherLevelContext = this.aggregateContext(inferenceResults);
+      
+      // Step 5: Generate a response based on the higher-level context
+      const response = await this.generateResponse(higherLevelContext);
+      
       return response;
     } catch (error) {
-      console.error('Error processing query:', error);
+      this.logger.error('Error processing query:', error);
       return 'Sorry, there was an error processing your request.';
     }
   }
@@ -56,85 +108,193 @@ class Bot {
    * @returns {Object} - The kernel object representing the user query.
    */
   convertQueryToKernel(userQuery) {
-    // Create a kernel from the user query (this could involve additional parsing or preprocessing)
-    const queryObject = { query: userQuery }; // Simple example; in real-world applications, more processing may be required
-    const { kernelReference, kernel } = this.uorCortex.createKernel(queryObject);
+    // Create a query object that will be converted to a kernel
+    const queryObject = { 
+      type: "query",
+      text: userQuery,
+      timestamp: Date.now()
+    };
     
-    return kernel;
+    // Create a kernel from the query object
+    const queryKernel = this.uorCortex.createKernel(queryObject);
+    
+    this.logger.log(`Converted query to kernel: ${queryKernel.kernelReference}`);
+    return queryKernel.kernel;
   }
 
   /**
-   * Applies logical inference to the resolved kernels.
-   * The inferred results are based on relationships, rules, and logic defined within the UOR framework.
-   * @param {Array} relatedKernels - The kernels retrieved during content resolution.
-   * @returns {Array} - The list of inference results based on logical reasoning.
+   * Traverse the UOR lattice to build a contextually rich representation of knowledge
+   * related to the query.
+   * @param {Object} queryKernel - The kernel representing the user's query
+   * @returns {Promise<Array>} - Array of relevant kernels that form the context
    */
-  applyLogicalInference(relatedKernels) {
-    // This method uses the logic engine to apply rules and infer new facts based on the retrieved kernels
-    return relatedKernels.map(kernel => this.logicEngine.applyInference(kernel)); // Apply inference to each kernel
-  }
-
-  /**
-   * Generates a response based on the inference results.
-   * The response is constructed by combining the original kernel data and any new insights gained from inference.
-   * @param {Array} inferenceResults - The list of inference results.
-   * @returns {string} - The final response to return to the user.
-   */
-  generateResponse(inferenceResults) {
-    // Combine the inferred knowledge to form a response (this could involve additional formatting, ranking, etc.)
-    if (inferenceResults.length === 0) {
-      return 'Sorry, I couldn\'t find any relevant information.';
-    }
-
-    // For simplicity, we join all inference results and return them as a response (custom response logic can be added)
-    const response = inferenceResults.map(result => result.data).join(' ');
-
-    return `Here is the information I found: ${response}`;
-  }
-
-  /**
-   * Function to traverse the UOR lattice and pack relevant context.
-   * This ensures the context is built incrementally and efficiently to stay within token limits.
-   * @param {string} userQuery - The user input query.
-   * @returns {Array} - The packed context for response generation.
-   */
-  async traverseUORLattice(query) {
-    // Ensure that the method is being called on this.uorCortex (instance of UORCortex)
-    if (this.uorCortex && typeof this.uorCortex.traverseUORLattice === 'function') {
-      return await this.uorCortex.traverseUORLattice(query); // Traverse the UOR lattice to collect relevant kernels
-    } else {
-      console.error('Error: traverseUORLattice method is not available on uorCortex');
+  async traverseUORLattice(queryKernel) {
+    this.logger.log(`Traversing UOR lattice for query kernel`);
+    
+    try {
+      // Delegate to the UOR Cortex for proper lattice traversal
+      const packedContext = await this.uorCortex.traverseUORLattice(queryKernel);
+      
+      this.logger.log(`Lattice traversal complete. Retrieved ${packedContext.length} relevant kernels`);
+      return packedContext;
+    } catch (error) {
+      this.logger.error(`Error during lattice traversal: ${error.message}`);
+      // Return an empty context in case of error
       return [];
     }
   }
 
   /**
-   * Function to aggregate kernels into a higher-level context.
-   * This ensures the context is synthesized into a more compact and coherent form.
-   * @param {Array} context - The context gathered from the lattice traversal.
-   * @returns {Array} - The aggregated higher-level context.
+   * Applies logical inference to the resolved kernels.
+   * The inferred results are based on relationships, rules, and logic defined within the UOR framework.
+   * @param {Array} packedContext - The kernels retrieved during lattice traversal.
+   * @returns {Array} - The list of inference results based on logical reasoning.
    */
-  aggregateContext(context) {
-    return this.uorCortex.aggregateContext(context); // Use the aggregation logic from UORCortex
+  applyLogicalInference(packedContext) {
+    this.logger.log(`Applying logical inference to ${packedContext.length} kernels`);
+    
+    // Apply inference to each kernel in the context
+    const inferenceResults = packedContext.map(contextItem => {
+      const kernel = contextItem;
+      
+      // Apply logic rules to the kernel
+      try {
+        const inferredKernel = this.logicEngine.applyInference(kernel);
+        return inferredKernel;
+      } catch (error) {
+        this.logger.error(`Inference error for kernel: ${error.message}`);
+        return kernel; // Return original kernel if inference fails
+      }
+    });
+    
+    this.logger.log(`Inference complete. Processed ${inferenceResults.length} kernels`);
+    return inferenceResults;
+  }
+
+  /**
+   * Aggregate context into a higher-level representation
+   * @param {Array} inferenceResults - The context after inference has been applied
+   * @returns {Object} - Higher-level context for response generation
+   */
+  aggregateContext(inferenceResults) {
+    this.logger.log(`Aggregating context from ${inferenceResults.length} kernels`);
+    
+    // Delegate to UOR Cortex for context aggregation
+    const higherLevelContext = this.uorCortex.aggregateContext(inferenceResults);
+    
+    // Organize key information for the response generator
+    const structuredContext = {
+      kernelCount: inferenceResults.length,
+      aggregatedKernels: higherLevelContext,
+      relevantFacts: this.extractRelevantFacts(higherLevelContext),
+      keyRelationships: this.extractKeyRelationships(higherLevelContext),
+      // Add any additional information that might help with response generation
+    };
+    
+    this.logger.log(`Context aggregation complete`);
+    return structuredContext;
+  }
+  
+  /**
+   * Extract the most relevant facts from the context for response generation
+   * @param {Array} higherLevelContext - The aggregated context
+   * @returns {Array} - Array of relevant facts
+   */
+  extractRelevantFacts(higherLevelContext) {
+    // Extract key facts from the kernels
+    return higherLevelContext
+      .filter(kernel => kernel.relevanceScore > 0.5) // Only high-relevance kernels
+      .map(kernel => {
+        // Extract the most important information
+        if (typeof kernel.data === 'object' && kernel.data.title && kernel.data.content) {
+          return { title: kernel.data.title, content: kernel.data.content };
+        } else if (typeof kernel.data === 'object') {
+          return { content: JSON.stringify(kernel.data) };
+        } else {
+          return { content: String(kernel.data) };
+        }
+      });
+  }
+  
+  /**
+   * Extract key relationships from the context
+   * @param {Array} higherLevelContext - The aggregated context 
+   * @returns {Array} - Array of important relationships
+   */
+  extractKeyRelationships(higherLevelContext) {
+    const relationships = [];
+    
+    // Build a map of kernels by reference for quick lookup
+    const kernelMap = new Map();
+    higherLevelContext.forEach(kernel => {
+      if (kernel.reference) {
+        kernelMap.set(kernel.reference, kernel);
+      }
+    });
+    
+    // Find relationships between kernels in the context
+    higherLevelContext.forEach(kernel => {
+      if (kernel.relationships) {
+        kernel.relationships.forEach(rel => {
+          const targetKernel = kernelMap.get(rel.targetKernelRef);
+          if (targetKernel) {
+            relationships.push({
+              source: kernel.reference,
+              sourceTitle: kernel.data.title || 'Unknown',
+              target: rel.targetKernelRef,
+              targetTitle: targetKernel.data.title || 'Unknown',
+              relationship: rel.relationshipType
+            });
+          }
+        });
+      }
+    });
+    
+    return relationships;
   }
 
   /**
    * Generates a response based on the higher-level context.
    * This method applies all the necessary context aggregation and inference before generating the final output.
-   * @param {Array} packedContext - The higher-level context to pass to the transformer model.
-   * @returns {string} - The response generated by the transformer model.
+   * @param {Object} higherLevelContext - The structured context for response generation.
+   * @returns {Promise<string>} - The response generated by the model.
    */
-  async generateResponse(packedContext) {
-    // Pass the packed context to the transformer model to generate a coherent response
-    const response = await transformerModel(packedContext, {
-      max_length: 200, // Adjust max length as needed
-      min_length: 50,  // Ensure responses aren't too short
-      num_return_sequences: 1, // Generate a single response
-      do_sample: true, // Use sampling for diversity
-      temperature: 0.7, // Control randomness (lower for more deterministic responses)
-    });
-
-    return response[0].generated_text; // Return the generated text as the response
+  async generateResponse(higherLevelContext) {
+    this.logger.log(`Generating response based on higher-level context`);
+    
+    // In a real implementation, this would call an LLM with the higher-level context
+    // For demonstration, we'll generate a simulated response based on the context
+    
+    const relevantFacts = higherLevelContext.relevantFacts;
+    const factCount = relevantFacts.length;
+    
+    // Simple response generation logic
+    let response = '';
+    
+    if (factCount === 0) {
+      response = "I don't have enough information to answer that question.";
+    } else {
+      // Combine facts into a coherent response
+      response = `Based on ${factCount} relevant pieces of information, I can tell you that `;
+      
+      // Add the most relevant facts
+      const mainFacts = relevantFacts.slice(0, 2).map(fact => fact.content);
+      response += mainFacts.join('. ') + '. ';
+      
+      // Add additional context if available
+      if (factCount > 2) {
+        response += `Additionally, ${relevantFacts[2].content}. `;
+      }
+      
+      // Add relationship context if available
+      const keyRelationships = higherLevelContext.keyRelationships;
+      if (keyRelationships && keyRelationships.length > 0) {
+        response += `It's worth noting that ${keyRelationships[0].sourceTitle} ${keyRelationships[0].relationship} ${keyRelationships[0].targetTitle}.`;
+      }
+    }
+    
+    this.logger.log(`Response generation complete`);
+    return response;
   }
 }
 
