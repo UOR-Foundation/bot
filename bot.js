@@ -4,12 +4,20 @@
 
 import UORCortex from './uor-cortex.js'; // Import UOR Cortex class to handle knowledge representation
 import { LogicEngine } from './semantics/logic.js'; // Import LogicEngine class
+import SchemaProcessor from './semantics/schema-processor.js'; // Import our new Schema Processor
 
-class Bot {
+export default class Bot {
   constructor() {
     this.logger = console; // Initialize logger first
     this.uorCortex = new UORCortex(); // Initialize the UOR Cortex for knowledge representation
     this.logicEngine = new LogicEngine(); // Initialize the LogicEngine
+    this.schemaProcessor = new SchemaProcessor(this.uorCortex); // Initialize the schema processor
+    this.conversationMemory = {
+      userName: null,
+      recentQueries: [],
+      personalInfo: {},
+      lastResponse: null
+    }; // Add conversation memory
     this.initBot(); // Initialize the bot after logger is set
   }
 
@@ -79,20 +87,37 @@ class Bot {
     try {
       this.logger.log(`Processing user query: "${userQuery}"`);
       
-      // Step 1: Convert user query into a kernel representation
-      const queryKernel = this.convertQueryToKernel(userQuery);
+      // Add to recent queries
+      this.updateConversationMemory(userQuery);
+      
+      // Process query using schema processor instead of simple conversion
+      const { queryKernel, semantics, createdKernels } = this.schemaProcessor.processQuery(userQuery);
+      
+      // Log semantic understanding
+      this.logger.log(`Semantic understanding: ${semantics.entities.length} entities, ${semantics.intents.length} intents`);
+      
+      // Check if this is a personal information question before traversing the lattice
+      if (this.isPersonalInfoQuestion(semantics)) {
+        const personalInfo = this.schemaProcessor.getPersonalInfoForQuestion(userQuery);
+        if (personalInfo) {
+          return this.generatePersonalInfoResponse(personalInfo);
+        }
+      }
       
       // Step 2: Traverse the UOR lattice to build a rich context
-      const packedContext = await this.traverseUORLattice(queryKernel);
+      const packedContext = await this.traverseUORLattice(queryKernel.kernel);
       
       // Step 3: Apply logical inference to the packed context
       const inferenceResults = this.applyLogicalInference(packedContext);
       
       // Step 4: Aggregate the context into a higher-level representation
-      const higherLevelContext = this.aggregateContext(inferenceResults);
+      const higherLevelContext = this.aggregateContext(inferenceResults, semantics);
       
       // Step 5: Generate a response based on the higher-level context
-      const response = await this.generateResponse(higherLevelContext);
+      const response = await this.generateResponse(higherLevelContext, semantics);
+      
+      // Store the response in memory
+      this.conversationMemory.lastResponse = response;
       
       return response;
     } catch (error) {
@@ -100,26 +125,60 @@ class Bot {
       return 'Sorry, there was an error processing your request.';
     }
   }
-
+  
   /**
-   * Converts a user query into a kernel representation.
-   * This transformation step allows the bot to understand the query as an object within the UOR framework.
-   * @param {string} userQuery - The user input query.
-   * @returns {Object} - The kernel object representing the user query.
+   * Updates the conversation memory with the current query
+   * @param {string} userQuery - The user's query
    */
-  convertQueryToKernel(userQuery) {
-    // Create a query object that will be converted to a kernel
-    const queryObject = { 
-      type: "query",
-      text: userQuery,
-      timestamp: Date.now()
-    };
+  updateConversationMemory(userQuery) {
+    // Add to recent queries (keep last 5)
+    this.conversationMemory.recentQueries.unshift(userQuery);
+    if (this.conversationMemory.recentQueries.length > 5) {
+      this.conversationMemory.recentQueries.pop();
+    }
     
-    // Create a kernel from the query object
-    const queryKernel = this.uorCortex.createKernel(queryObject);
+    // Other memory updates handled by schema processor via kernels
+  }
+  
+  /**
+   * Checks if the query is asking for personal information
+   * @param {Object} semantics - The semantic understanding of the query
+   * @returns {boolean} - True if this is a personal info question
+   */
+  isPersonalInfoQuestion(semantics) {
+    // Check if there's a question intent
+    const hasQuestionIntent = semantics.intents.some(intent => 
+      intent.type === 'question' && intent.confidence > 0.7
+    );
     
-    this.logger.log(`Converted query to kernel: ${queryKernel.kernelReference}`);
-    return queryKernel.kernel;
+    if (!hasQuestionIntent) return false;
+    
+    // Check if there are personal pronouns in the query
+    const hasPersonalReferences = semantics.original.match(/\b(my|me|i|mine)\b/i);
+    
+    return hasPersonalReferences !== null;
+  }
+  
+  /**
+   * Generates a response for personal information questions
+   * @param {Object} personalInfo - The personal information found
+   * @returns {string} - The response
+   */
+  generatePersonalInfoResponse(personalInfo) {
+    if (!personalInfo) {
+      return "I don't have that personal information about you yet.";
+    }
+    
+    switch (personalInfo.property) {
+      case 'name':
+        return `Your name is ${personalInfo.value}.`;
+      case 'age':
+        return `You told me you are ${personalInfo.value} years old.`;
+      case 'location':
+        return `You told me you're from ${personalInfo.value}.`;
+      default:
+        return `I know that your ${personalInfo.property} is ${personalInfo.value}.`;
+    }
   }
 
   /**
@@ -174,21 +233,26 @@ class Bot {
   /**
    * Aggregate context into a higher-level representation
    * @param {Array} inferenceResults - The context after inference has been applied
+   * @param {Object} semantics - The semantic understanding of the query
    * @returns {Object} - Higher-level context for response generation
    */
-  aggregateContext(inferenceResults) {
+  aggregateContext(inferenceResults, semantics) {
     this.logger.log(`Aggregating context from ${inferenceResults.length} kernels`);
+    
+    // Get the original user query
+    let queryText = semantics ? semantics.original : "";
     
     // Delegate to UOR Cortex for context aggregation
     const higherLevelContext = this.uorCortex.aggregateContext(inferenceResults);
     
     // Organize key information for the response generator
     const structuredContext = {
+      queryText: queryText,
       kernelCount: inferenceResults.length,
       aggregatedKernels: higherLevelContext,
       relevantFacts: this.extractRelevantFacts(higherLevelContext),
       keyRelationships: this.extractKeyRelationships(higherLevelContext),
-      // Add any additional information that might help with response generation
+      semantics: semantics // Include semantic understanding
     };
     
     this.logger.log(`Context aggregation complete`);
@@ -203,9 +267,19 @@ class Bot {
   extractRelevantFacts(higherLevelContext) {
     // Extract key facts from the kernels
     return higherLevelContext
-      .filter(kernel => kernel.relevanceScore > 0.5) // Only high-relevance kernels
+      .filter(kernel => kernel.relevanceScore > 0.1) // Include more kernels
       .map(kernel => {
-        // Extract the most important information
+        // Check for schema type kernels first
+        if (kernel.data && kernel.data.schemaType) {
+          // Handle schema.org typed kernels
+          return {
+            schemaType: kernel.data.schemaType,
+            properties: kernel.data.properties || {},
+            relevance: kernel.relevanceScore
+          };
+        }
+        
+        // Extract the most important information from regular kernels
         if (typeof kernel.data === 'object' && kernel.data.title && kernel.data.content) {
           return { title: kernel.data.title, content: kernel.data.content };
         } else if (typeof kernel.data === 'object') {
@@ -238,11 +312,25 @@ class Bot {
         kernel.relationships.forEach(rel => {
           const targetKernel = kernelMap.get(rel.targetKernelRef);
           if (targetKernel) {
+            // Get titles from kernel data
+            let sourceTitle = 'Unknown';
+            let targetTitle = 'Unknown';
+            
+            if (kernel.data) {
+              sourceTitle = kernel.data.title || 
+                           (kernel.data.schemaType ? kernel.data.schemaType : 'Unknown');
+            }
+            
+            if (targetKernel.data) {
+              targetTitle = targetKernel.data.title || 
+                           (targetKernel.data.schemaType ? targetKernel.data.schemaType : 'Unknown');
+            }
+            
             relationships.push({
               source: kernel.reference,
-              sourceTitle: kernel.data.title || 'Unknown',
+              sourceTitle: sourceTitle,
               target: rel.targetKernelRef,
-              targetTitle: targetKernel.data.title || 'Unknown',
+              targetTitle: targetTitle,
               relationship: rel.relationshipType
             });
           }
@@ -257,32 +345,145 @@ class Bot {
    * Generates a response based on the higher-level context.
    * This method applies all the necessary context aggregation and inference before generating the final output.
    * @param {Object} higherLevelContext - The structured context for response generation.
+   * @param {Object} semantics - The semantic understanding of the query.
    * @returns {Promise<string>} - The response generated by the model.
    */
-  async generateResponse(higherLevelContext) {
-    this.logger.log(`Generating response based on higher-level context`);
+  async generateResponse(higherLevelContext, semantics) {
+    this.logger.log(`Generating response based on higher-level context and semantics`);
     
-    // In a real implementation, this would call an LLM with the higher-level context
-    // For demonstration, we'll generate a simulated response based on the context
+    // Get the query text
+    const queryText = higherLevelContext.queryText || '';
     
-    const relevantFacts = higherLevelContext.relevantFacts;
+    // Determine the primary intent from semantics
+    const primaryIntent = semantics && semantics.intents.length > 0 
+      ? semantics.intents.sort((a, b) => b.confidence - a.confidence)[0].type
+      : 'unknown';
+      
+    this.logger.log(`Primary intent: ${primaryIntent}`);
+    
+    // Handle different intent types
+    switch (primaryIntent) {
+      case 'greet':
+        return this.generateGreetingResponse(semantics);
+        
+      case 'question':
+        // Check for personal information queries again (just to be sure)
+        if (this.isPersonalInfoQuestion(semantics)) {
+          const personalInfo = this.schemaProcessor.getPersonalInfoForQuestion(queryText);
+          if (personalInfo) {
+            return this.generatePersonalInfoResponse(personalInfo);
+          }
+        }
+        // Fall through to standard question handling
+        return this.generateInformationalResponse(higherLevelContext, semantics);
+        
+      case 'inform':
+        // Handle when user is providing information
+        return this.generateAcknowledgementResponse(semantics);
+        
+      default:
+        // Default to informational response
+        return this.generateInformationalResponse(higherLevelContext, semantics);
+    }
+  }
+  
+  /**
+   * Generates a greeting response
+   * @param {Object} semantics - The semantic understanding of the query
+   * @returns {string} - The greeting response
+   */
+  generateGreetingResponse(semantics) {
+    // Look for a Person entity with a name
+    const personEntity = semantics.entities.find(entity => 
+      entity.type === 'Person' && entity.properties && entity.properties.name
+    );
+    
+    if (personEntity) {
+      return `Hello ${personEntity.properties.name}! I'm a bot based on the UOR framework. How can I help you today?`;
+    } else {
+      return "Hello! I'm a bot based on the UOR (Universal Object Reference) framework. I can help answer questions about hierarchical context systems, token management, and knowledge representation. What would you like to know?";
+    }
+  }
+  
+  /**
+   * Generates a response acknowledging provided information
+   * @param {Object} semantics - The semantic understanding of the query
+   * @returns {string} - The acknowledgement response
+   */
+  generateAcknowledgementResponse(semantics) {
+    // Check what information was provided
+    const personEntity = semantics.entities.find(entity => entity.type === 'Person');
+    
+    if (personEntity) {
+      const props = personEntity.properties;
+      
+      if (props.name) {
+        return `Nice to meet you, ${props.name}! How can I help you today?`;
+      }
+      
+      if (props.age) {
+        return `Thanks for letting me know you're ${props.age} years old. Is there something I can help you with?`;
+      }
+      
+      if (props.location) {
+        return `Thanks for letting me know you're from ${props.location}. Is there something I can help you with?`;
+      }
+      
+      return "Thanks for sharing that information with me. Is there something specific you'd like to know?";
+    }
+    
+    return "I've noted that information. How can I assist you?";
+  }
+  
+  /**
+   * Generates an informational response based on knowledge base
+   * @param {Object} higherLevelContext - The structured context
+   * @param {Object} semantics - The semantic understanding of the query
+   * @returns {string} - The informational response
+   */
+  generateInformationalResponse(higherLevelContext, semantics) {
+    const relevantFacts = higherLevelContext.relevantFacts || [];
     const factCount = relevantFacts.length;
     
-    // Simple response generation logic
-    let response = '';
+    // If we have semantically-typed facts about schema entities, use those first
+    const schemaFacts = relevantFacts.filter(fact => fact.schemaType);
     
+    if (schemaFacts.length > 0) {
+      // Handle schema-based facts specifically
+      const personFacts = schemaFacts.filter(fact => fact.schemaType === 'Person');
+      
+      if (personFacts.length > 0) {
+        // Generate response about person
+        const person = personFacts[0];
+        return `I know that your name is ${person.properties.name || 'unknown'}${
+          person.properties.age ? ` and you are ${person.properties.age} years old` : ''
+        }${
+          person.properties.location ? ` and you're from ${person.properties.location}` : ''
+        }.`;
+      }
+    }
+    
+    // If no relevant schema facts, use domain knowledge
     if (factCount === 0) {
-      response = "I don't have enough information to answer that question.";
+      return "I don't have specific information on that topic in my knowledge base. I'm a bot based on the UOR framework, which focuses on hierarchical context management, token limit handling, and knowledge representation through interconnected kernels. Would you like to know more about any of these topics?";
     } else {
       // Combine facts into a coherent response
-      response = `Based on ${factCount} relevant pieces of information, I can tell you that `;
+      let response = `Based on the information in my knowledge base, `;
       
       // Add the most relevant facts
-      const mainFacts = relevantFacts.slice(0, 2).map(fact => fact.content);
-      response += mainFacts.join('. ') + '. ';
+      const mainFacts = relevantFacts
+        .filter(fact => fact.content) // Only include facts with content
+        .slice(0, 2)
+        .map(fact => fact.content);
+      
+      if (mainFacts.length > 0) {
+        response += mainFacts.join('. ') + '. ';
+      } else {
+        response += "I can provide some information on that topic. ";
+      }
       
       // Add additional context if available
-      if (factCount > 2) {
+      if (factCount > 2 && relevantFacts[2].content) {
         response += `Additionally, ${relevantFacts[2].content}. `;
       }
       
@@ -291,11 +492,8 @@ class Bot {
       if (keyRelationships && keyRelationships.length > 0) {
         response += `It's worth noting that ${keyRelationships[0].sourceTitle} ${keyRelationships[0].relationship} ${keyRelationships[0].targetTitle}.`;
       }
+      
+      return response;
     }
-    
-    this.logger.log(`Response generation complete`);
-    return response;
   }
 }
-
-export default Bot; // Default export of the Bot class

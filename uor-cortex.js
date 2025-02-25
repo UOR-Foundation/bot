@@ -183,17 +183,55 @@ class UORCortex {
 
     // Traverse through all kernels in the graph and find the related ones
     this.uorGraph.forEach((kernel, reference) => {
+      // Skip if the kernel is already in the related list
+      if (relatedKernels.some(k => k.reference === reference)) {
+        return;
+      }
+      
       const relevanceScore = this.calculateRelevance(queryKernel, kernel);
-      if (relevanceScore > 0.1) { // Threshold for relevance
-        kernel.relevanceScore = relevanceScore; // Store the relevance score in the kernel
-        relatedKernels.push({ ...kernel, reference });
+      
+      // For greeting or very short queries, include all kernels with a base relevance
+      const queryText = typeof query === 'string' 
+        ? query 
+        : (query.data && query.data.text) 
+          ? query.data.text 
+          : JSON.stringify(query.data);
+      
+      const isGeneralQuery = queryText.length < 5 || 
+                             /^(hi|hello|hey|greetings)/i.test(queryText);
+      
+      // Adjust threshold based on query type and kernel count
+      const threshold = isGeneralQuery ? 0.01 : 0.1;
+      
+      if (relevanceScore > threshold) {
+        // Create a copy of the kernel with the relevance score
+        const kernelWithRelevance = { 
+          ...kernel, 
+          reference, 
+          relevanceScore 
+        };
+        relatedKernels.push(kernelWithRelevance);
       }
     });
     
+    // If no kernels found and this is a general query, include all kernels with a base relevance
+    if (relatedKernels.length === 0) {
+      this.logger.log("[UOR] No directly relevant kernels found, including all kernels with base relevance");
+      this.uorGraph.forEach((kernel, reference) => {
+        relatedKernels.push({
+          ...kernel,
+          reference,
+          relevanceScore: 0.1 // Base relevance
+        });
+      });
+    }
+    
     // Sort by relevance score (descending)
     relatedKernels.sort((a, b) => b.relevanceScore - a.relevanceScore);
-
-    return relatedKernels;
+    
+    // Limit the number of kernels returned to avoid overwhelming the system
+    const maxKernels = 10;
+    return relatedKernels.slice(0, maxKernels);
   }
 
   /**
@@ -204,21 +242,69 @@ class UORCortex {
    */
   calculateRelevance(kernel1, kernel2) {
     // In a production system, this would use embedding similarity
-    // Here we use a simple text matching approach
+    // Here we use a simple text matching approach with improvements for general queries
     
-    const text1 = typeof kernel1.data === 'string' 
-      ? kernel1.data 
-      : JSON.stringify(kernel1.data);
+    // Extract text from kernels
+    let text1 = '';
+    if (typeof kernel1.data === 'string') {
+      text1 = kernel1.data;
+    } else if (kernel1.data) {
+      // Handle query objects specially
+      if (kernel1.data.type === 'query' && kernel1.data.text) {
+        text1 = kernel1.data.text;
+      } else if (kernel1.data.query) {
+        text1 = kernel1.data.query;
+      } else {
+        // Extract fields that might contain query text
+        text1 = Object.values(kernel1.data)
+          .filter(val => typeof val === 'string')
+          .join(' ');
+      }
+    }
+    
+    let text2 = '';
+    if (typeof kernel2.data === 'string') {
+      text2 = kernel2.data;
+    } else if (kernel2.data) {
+      // For content kernels, prioritize title and content fields
+      if (kernel2.data.title) text2 += kernel2.data.title + ' ';
+      if (kernel2.data.content) text2 += kernel2.data.content + ' ';
+      if (text2.trim() === '') {
+        // If no title/content, use all string fields
+        text2 = Object.values(kernel2.data)
+          .filter(val => typeof val === 'string')
+          .join(' ');
+      }
+    }
+    
+    // Handle general queries like "Hi" or very short queries
+    if (text1.length < 5) {
+      // For very short queries, return a low but non-zero relevance for all kernels
+      // This ensures the bot can respond with some information
+      return 0.1;
+    }
+    
+    // For "what is X" type questions, extract the key term
+    const whatIsMatch = text1.match(/what\s+is\s+(\w+)/i);
+    if (whatIsMatch && whatIsMatch[1]) {
+      const searchTerm = whatIsMatch[1].toLowerCase();
       
-    const text2 = typeof kernel2.data === 'string' 
-      ? kernel2.data 
-      : JSON.stringify(kernel2.data);
+      // Check if the term appears in the kernel data
+      if (text2.toLowerCase().includes(searchTerm)) {
+        // Higher relevance if the search term is in a title
+        if (kernel2.data && kernel2.data.title && 
+            kernel2.data.title.toLowerCase().includes(searchTerm)) {
+          return 0.9;
+        }
+        return 0.7;
+      }
+    }
     
     // Convert to lowercase for case-insensitive comparison
     const words1 = text1.toLowerCase().split(/\W+/).filter(w => w.length > 2);
     const words2 = text2.toLowerCase().split(/\W+/).filter(w => w.length > 2);
     
-    // Count matching words
+    // Count matching words with higher weight for important words
     let matchCount = 0;
     for (const word of words1) {
       if (words2.includes(word)) {
@@ -226,9 +312,28 @@ class UORCortex {
       }
     }
     
-    // Calculate relevance score (simplified Jaccard similarity)
+    // If no matches but we're looking for "bot" information
+    if (matchCount === 0 && text1.toLowerCase().includes('bot')) {
+      // Check if kernel2 is related to bot functionality
+      if (text2.toLowerCase().includes('bot') || 
+          text2.toLowerCase().includes('chatbot') ||
+          text2.toLowerCase().includes('framework')) {
+        return 0.5; // Return medium relevance
+      }
+    }
+    
+    // Calculate relevance score (improved Jaccard similarity)
     const uniqueWords = new Set([...words1, ...words2]);
-    return matchCount / uniqueWords.size;
+    const baseRelevance = uniqueWords.size > 0 ? matchCount / uniqueWords.size : 0;
+    
+    // Boost relevance for kernels that directly mention query terms
+    for (const word of words1) {
+      if (word.length > 3 && text2.toLowerCase().includes(word)) {
+        return Math.max(baseRelevance, 0.4); // Ensure minimum relevance of 0.4 for direct matches
+      }
+    }
+    
+    return baseRelevance;
   }
 
   /**
