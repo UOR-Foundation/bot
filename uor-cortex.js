@@ -1,5 +1,5 @@
-// Corrected uor-cortex.js
-// Properly implements UOR Lattice traversal according to the specification
+// Enhanced uor-cortex.js
+// Improved implementation of UOR Lattice traversal for schema-based knowledge representation
 
 const TOKEN_LIMIT = 1000;  // Define the token limit for context
 
@@ -58,12 +58,44 @@ class UORCortex {
 
   /**
    * Creates a new kernel (encoded object) in the UOR framework.
+   * Enhanced to better handle schema-typed objects and updates
    * @param {Object} objectData - The data representing the object to be encoded.
    * @returns {Object} - The newly created or existing kernel.
    */
   createKernel(objectData) {
     // Generate a unique reference for the new kernel
     const kernelReference = this.generateUniqueReference();
+
+    // For schema-typed objects, check if we're updating an existing kernel
+    if (objectData && objectData.schemaType === 'Person') {
+      // Try to find existing Person kernel to update
+      for (let [reference, kernel] of this.uorGraph.entries()) {
+        if (kernel.data && kernel.data.schemaType === 'Person') {
+          this.logger.log(`Found existing Person kernel to update: ${reference}`);
+          
+          // Create an updated kernel with merged properties
+          const updatedData = {
+            ...kernel.data,
+            properties: {
+              ...kernel.data.properties,
+              ...objectData.properties
+            },
+            timestamp: Date.now() // Update timestamp
+          };
+          
+          // Encode the updated object
+          const updatedKernel = this.encodeObject(updatedData);
+          
+          // Preserve relationships
+          updatedKernel.relationships = kernel.relationships || [];
+          
+          // Update in the graph
+          this.uorGraph.set(reference, updatedKernel);
+          
+          return { kernelReference: reference, kernel: updatedKernel };
+        }
+      }
+    }
 
     // Check if the kernel's data already exists in the uorGraph
     for (let [reference, kernel] of this.uorGraph.entries()) {
@@ -133,6 +165,7 @@ class UORCortex {
 
   /**
    * Links two kernels in the UOR graph, defining their semantic relationship.
+   * Enhanced to better track bidirectional relationships
    * @param {String} kernel1Ref - The reference of the first kernel.
    * @param {String} kernel2Ref - The reference of the second kernel.
    * @param {String} relationship - The relationship between the two kernels.
@@ -155,21 +188,49 @@ class UORCortex {
     // Ensure the relationship does not violate coherence norms
     this.checkConsistency(relationshipData);
 
-    // Link the two kernels by storing the relationship in kernel1
-    if (!kernel1.relationships) kernel1.relationships = [];
-    kernel1.relationships.push(relationshipData);
+    // Check if the relationship already exists to avoid duplicates
+    const existingRelationship = (kernel1.relationships || []).find(rel => 
+      rel.targetKernelRef === kernel2Ref && rel.relationshipType === relationship
+    );
+
+    if (!existingRelationship) {
+      // Link the two kernels by storing the relationship in kernel1
+      if (!kernel1.relationships) kernel1.relationships = [];
+      kernel1.relationships.push(relationshipData);
+      
+      this.logger.log(`Linked ${kernel1Ref} -[${relationship}]-> ${kernel2Ref}`);
+    }
     
     // For bidirectional relationships, also add the inverse relationship
-    if (!kernel2.relationships) kernel2.relationships = [];
-    kernel2.relationships.push({
-      targetKernelRef: kernel1Ref,
-      relationshipType: `inverse_${relationship}`,
-      weight: 1.0
-    });
+    // Determine inverse relationship name
+    let inverseRelationship = `inverse_${relationship}`;
+    
+    // Some relationships have specific inverse names
+    if (relationship === 'mentions') inverseRelationship = 'mentionedBy';
+    if (relationship === 'contains') inverseRelationship = 'containedIn';
+    if (relationship === 'participatesIn') inverseRelationship = 'hasParticipant';
+    if (relationship === 'partOf') inverseRelationship = 'hasPart';
+    
+    // Check if inverse relationship already exists
+    const existingInverseRelationship = (kernel2.relationships || []).find(rel => 
+      rel.targetKernelRef === kernel1Ref && rel.relationshipType === inverseRelationship
+    );
+    
+    if (!existingInverseRelationship) {
+      if (!kernel2.relationships) kernel2.relationships = [];
+      kernel2.relationships.push({
+        targetKernelRef: kernel1Ref,
+        relationshipType: inverseRelationship,
+        weight: 1.0
+      });
+      
+      this.logger.log(`Linked ${kernel2Ref} -[${inverseRelationship}]-> ${kernel1Ref}`);
+    }
   }
 
   /**
    * Resolves content based on a query kernel, tracing related kernels across the UOR graph.
+   * Enhanced to better handle schema-typed queries
    * @param {Object|String} query - The query kernel or string to resolve.
    * @returns {Array} - The list of kernels that resolve the query.
    */
@@ -181,7 +242,26 @@ class UORCortex {
     
     const relatedKernels = [];
 
-    // Traverse through all kernels in the graph and find the related ones
+    // First, check if this is a personal information query
+    const isPersonalQuery = this.isPersonalInfoQuery(queryKernel);
+    
+    // For personal queries, first prioritize Person kernels
+    if (isPersonalQuery) {
+      this.logger.log(`Detected personal info query: ${typeof query === 'string' ? query : queryKernel.data.text}`);
+      // Find Person kernels
+      for (let [reference, kernel] of this.uorGraph.entries()) {
+        if (kernel.data && kernel.data.schemaType === 'Person') {
+          relatedKernels.push({
+            ...kernel,
+            reference,
+            relevanceScore: 0.95 // High relevance for Person kernels in personal queries
+          });
+          this.logger.log(`Found Person kernel with high relevance: ${reference}`);
+        }
+      }
+    }
+
+    // Then find other relevant kernels based on content similarity
     this.uorGraph.forEach((kernel, reference) => {
       // Skip if the kernel is already in the related list
       if (relatedKernels.some(k => k.reference === reference)) {
@@ -198,7 +278,7 @@ class UORCortex {
           : JSON.stringify(query.data);
       
       const isGeneralQuery = queryText.length < 5 || 
-                             /^(hi|hello|hey|greetings)/i.test(queryText);
+                            /^(hi|hello|hey|greetings)/i.test(queryText);
       
       // Adjust threshold based on query type and kernel count
       const threshold = isGeneralQuery ? 0.01 : 0.1;
@@ -229,20 +309,83 @@ class UORCortex {
     // Sort by relevance score (descending)
     relatedKernels.sort((a, b) => b.relevanceScore - a.relevanceScore);
     
+    // Log the top relevant kernels
+    if (relatedKernels.length > 0) {
+      this.logger.log(`Top relevant kernel: ${relatedKernels[0].reference} with score ${relatedKernels[0].relevanceScore}`);
+    }
+    
     // Limit the number of kernels returned to avoid overwhelming the system
     const maxKernels = 10;
     return relatedKernels.slice(0, maxKernels);
   }
 
   /**
+   * Checks if a query is asking for personal information
+   * @param {Object} queryKernel - The query kernel
+   * @returns {boolean} - Whether this is a personal info query
+   */
+  isPersonalInfoQuery(queryKernel) {
+    // Extract query text
+    let queryText = '';
+    if (typeof queryKernel.data === 'string') {
+      queryText = queryKernel.data;
+    } else if (queryKernel.data) {
+      queryText = queryKernel.data.text || JSON.stringify(queryKernel.data);
+    }
+    
+    // Personal info query patterns
+    const personalInfoPatterns = [
+      /what(?:'s| is) my name/i,
+      /who am i/i,
+      /how old am i/i,
+      /what(?:'s| is) my age/i,
+      /where (?:am i from|do i live)/i,
+      /what(?:'s| is) my location/i,
+      /tell me about (myself|me)/i
+    ];
+    
+    // Check if any pattern matches
+    return personalInfoPatterns.some(pattern => pattern.test(queryText));
+  }
+
+  /**
    * Calculates the relevance (similarity) between two kernels.
+   * Enhanced to better handle schema-typed kernels and semantic understanding
    * @param {Object} kernel1 - The first kernel.
    * @param {Object} kernel2 - The second kernel.
    * @returns {number} - Relevance score between 0 and 1.
    */
   calculateRelevance(kernel1, kernel2) {
-    // In a production system, this would use embedding similarity
-    // Here we use a simple text matching approach with improvements for general queries
+    // Special handling for schema-typed kernels
+    // If kernel1 is a query and kernel2 is a Person kernel
+    if (kernel1.data && kernel2.data && kernel2.data.schemaType === 'Person') {
+      // For queries about personal information
+      const queryText = typeof kernel1.data === 'string' 
+        ? kernel1.data 
+        : (kernel1.data.text || JSON.stringify(kernel1.data));
+      
+      // Check for personal info queries
+      if (this.isPersonalInfoQuery(kernel1)) {
+        this.logger.log(`High relevance for Person kernel matched with personal query`);
+        return 0.95; // Very high relevance for Person kernels in personal info queries
+      }
+      
+      // For greetings or general conversation, Person kernels are somewhat relevant
+      if (/^(hi|hello|hey|greetings)/i.test(queryText)) {
+        return 0.7; // High relevance for Person kernels in greetings
+      }
+    }
+    
+    // Special handling for queries about specific schema types
+    if (kernel1.data && kernel1.data.type === 'query' && kernel2.data && kernel2.data.schemaType) {
+      const queryText = kernel1.data.text || '';
+      const schemaType = kernel2.data.schemaType;
+      
+      // If query explicitly mentions the schema type
+      if (queryText.toLowerCase().includes(schemaType.toLowerCase())) {
+        return 0.8; // High relevance for explicitly mentioned schema types
+      }
+    }
     
     // Extract text from kernels
     let text1 = '';
@@ -266,6 +409,20 @@ class UORCortex {
     if (typeof kernel2.data === 'string') {
       text2 = kernel2.data;
     } else if (kernel2.data) {
+      // For schema-typed kernels, include schema type in relevance calculation
+      if (kernel2.data.schemaType) {
+        text2 += kernel2.data.schemaType + ' ';
+        
+        // Include properties for better matching
+        if (kernel2.data.properties) {
+          Object.values(kernel2.data.properties)
+            .filter(val => typeof val === 'string' || typeof val === 'number')
+            .forEach(val => {
+              text2 += val + ' ';
+            });
+        }
+      }
+      
       // For content kernels, prioritize title and content fields
       if (kernel2.data.title) text2 += kernel2.data.title + ' ';
       if (kernel2.data.content) text2 += kernel2.data.content + ' ';
@@ -383,7 +540,7 @@ class UORCortex {
 
   /**
    * Traverse the UOR lattice and pack context into layers
-   * Implements proper graph traversal logic following relationships between kernels
+   * Enhanced to better handle schema-typed kernels and personal info
    * @param {String|Object} queryInput - The initial query string or kernel
    * @returns {Promise<Array>} - The packed context (array of relevant kernels)
    */
@@ -401,11 +558,28 @@ class UORCortex {
       ? { data: queryInput, encodedRepresentation: this.encodeData({ query: queryInput }) }
       : queryInput;
     
+    // Check if this is a personal information query
+    const isPersonalQuery = this.isPersonalInfoQuery(queryKernel);
+    
     // Get initial related kernels based on content similarity
     const initialKernels = this.resolveContent(queryKernel);
     traversalQueue.push(...initialKernels);
     
     this.logger.log(`[UOR] Initial content resolution found ${initialKernels.length} relevant kernels`);
+    
+    // For personal queries, ensure Person kernels are prioritized even more
+    if (isPersonalQuery) {
+      // Move any Person kernels to the front of the queue
+      const personKernels = traversalQueue.filter(k => 
+        k.data && k.data.schemaType === 'Person'
+      );
+      const otherKernels = traversalQueue.filter(k => 
+        !k.data || k.data.schemaType !== 'Person'
+      );
+      
+      traversalQueue = [...personKernels, ...otherKernels];
+      this.logger.log(`[UOR] Prioritized ${personKernels.length} Person kernels for personal query`);
+    }
     
     // Process kernels in the queue using breadth-first traversal
     while (traversalQueue.length > 0 && currentTokenCount < TOKEN_LIMIT) {
@@ -449,14 +623,31 @@ class UORCortex {
               
               // Calculate relevance to original query
               const relevanceToQuery = this.calculateRelevance(queryKernel, relatedKernel);
-              relatedKernel.relevanceScore = relevanceToQuery;
+              
+              // For personal queries, boost relevance of Person kernels in relationships
+              let adjustedRelevance = relevanceToQuery;
+              if (isPersonalQuery && relatedKernel.data && relatedKernel.data.schemaType === 'Person') {
+                adjustedRelevance = Math.max(relevanceToQuery, 0.9);
+                this.logger.log(`[UOR] Boosted relevance for Person kernel in relationship: ${relatedKernelRef}`);
+              }
+              
+              // Adjust relevance based on relationship type
+              // Certain relationships should have higher priority for certain types of queries
+              let relationshipBoost = 0;
+              if (isPersonalQuery && 
+                  (relationship.relationshipType === 'participatesIn' || 
+                   relationship.relationshipType === 'hasParticipant' ||
+                   relationship.relationshipType === 'mentions' ||
+                   relationship.relationshipType === 'mentionedBy')) {
+                relationshipBoost = 0.2;
+              }
               
               // Add to traversal queue with relevance to query for prioritization
               traversalQueue.push({ 
                 ...relatedKernel, 
                 reference: relatedKernelRef,
                 // Combine relationship weight with relevance score
-                relevanceScore: relationship.weight * 0.5 + relevanceToQuery * 0.5
+                relevanceScore: (relationship.weight * 0.3) + (adjustedRelevance * 0.7) + relationshipBoost
               });
             } catch (error) {
               this.logger.error(`[UOR] Error retrieving related kernel ${relatedKernelRef}: ${error.message}`);
@@ -474,20 +665,58 @@ class UORCortex {
     
     this.logger.log(`[UOR] Traversal complete. Context contains ${context.length} kernels (${currentTokenCount}/${TOKEN_LIMIT} tokens)`);
     
+    // For personal queries, log information about Person kernels in context
+    if (isPersonalQuery) {
+      const personKernelsInContext = context.filter(k => 
+        k.data && k.data.schemaType === 'Person'
+      );
+      
+      if (personKernelsInContext.length > 0) {
+        this.logger.log(`[UOR] Context contains ${personKernelsInContext.length} Person kernels for personal query`);
+        personKernelsInContext.forEach(k => {
+          if (k.data && k.data.properties) {
+            this.logger.log(`[UOR] Person kernel properties: ${JSON.stringify(k.data.properties)}`);
+          }
+        });
+      } else {
+        this.logger.log(`[UOR] No Person kernels found in context for personal query`);
+      }
+    }
+    
     return context;
   }
 
   /**
    * Aggregate kernels into higher-level context
+   * Enhanced to better prioritize schema-typed kernels
    * @param {Array} context - The context to be aggregated
    * @returns {Array} - The higher-level aggregated context
    */
   aggregateContext(context) {
     this.logger.log(`[UOR] Aggregating context of ${context.length} kernels`);
     
-    // If context is already small enough, return as is
-    if (estimateTokenCount(context) <= TOKEN_LIMIT / 2) {
-      return context;
+    // Identify schema-typed kernels for special handling
+    const schemaKernels = context.filter(k => k.data && k.data.schemaType);
+    const regularKernels = context.filter(k => !k.data || !k.data.schemaType);
+    
+    this.logger.log(`[UOR] Context contains ${schemaKernels.length} schema-typed kernels and ${regularKernels.length} regular kernels`);
+    
+    // Always prioritize schema-typed kernels (especially Person kernels)
+    schemaKernels.sort((a, b) => {
+      // Prioritize Person kernels first
+      if (a.data.schemaType === 'Person' && b.data.schemaType !== 'Person') return -1;
+      if (a.data.schemaType !== 'Person' && b.data.schemaType === 'Person') return 1;
+      
+      // Then sort by relevance
+      return (b.relevanceScore || 0) - (a.relevanceScore || 0);
+    });
+    
+    // Sort regular kernels by relevance
+    regularKernels.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+    
+    // If context is already small enough, return the prioritized list
+    if (estimateTokenCount([...schemaKernels, ...regularKernels]) <= TOKEN_LIMIT / 2) {
+      return [...schemaKernels, ...regularKernels];
     }
     
     // Organize context into levels based on relevance scores
@@ -497,8 +726,11 @@ class UORCortex {
       level3: []  // Higher-level - lower relevance, background context
     };
     
-    // Classify kernels into levels
-    for (const kernel of context) {
+    // All schema kernels go into level 1 (highest priority)
+    contextLevels.level1.push(...schemaKernels);
+    
+    // Classify regular kernels into levels
+    for (const kernel of regularKernels) {
       const relevanceScore = kernel.relevanceScore || 0;
       
       if (relevanceScore > 0.7) {
