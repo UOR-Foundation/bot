@@ -3,7 +3,7 @@
 
 /**
  * RelevanceCalculator class provides enhanced relevance calculation 
- * with context-aware scoring for different kernel types
+ * with context-aware scoring for different schema.org types
  */
 class RelevanceCalculator {
   constructor() {
@@ -13,6 +13,7 @@ class RelevanceCalculator {
     this.contextMultipliers = {
       personal: {
         Person: 2.0,
+        Organization: 0.8,
         Question: 1.2,
         Topic: 0.8,
         default: 1.0
@@ -21,6 +22,7 @@ class RelevanceCalculator {
         Topic: 1.8,
         Question: 1.3,
         Person: 0.5,
+        Organization: 1.2,
         default: 1.0
       },
       general: {
@@ -31,82 +33,82 @@ class RelevanceCalculator {
     // Weight factors for different relevance components
     this.weights = {
       textualSimilarity: 0.5,
-      schemaTypeMatch: 0.3,
+      semanticSimilarity: 0.3,
       temporalRecency: 0.2
     };
   }
   
   /**
-   * Calculate base relevance between a query kernel and a candidate kernel
-   * @param {Object} queryKernel - The query kernel
-   * @param {Object} candidateKernel - The candidate kernel to evaluate
+   * Calculate base relevance between a query and an entity
+   * @param {Object} query - The query (can be text or structured)
+   * @param {Object} entity - The entity to evaluate
    * @returns {number} Base relevance score between 0 and 1
    */
-  calculateBaseRelevance(queryKernel, candidateKernel) {
-    this.logger.log(`Calculating base relevance between query and candidate kernel`);
+  calculateBaseRelevance(query, entity) {
+    this.logger.log(`Calculating base relevance between query and entity`);
     
     try {
-      // Extract text from query kernel
+      // Extract text from query
       let queryText = '';
-      if (typeof queryKernel.data === 'string') {
-        queryText = queryKernel.data;
-      } else if (queryKernel.data) {
+      if (typeof query.data === 'string') {
+        queryText = query.data;
+      } else if (query.data) {
         // Handle query objects specifically
-        if (queryKernel.data.type === 'query' && queryKernel.data.text) {
-          queryText = queryKernel.data.text;
-        } else if (queryKernel.data.query) {
-          queryText = queryKernel.data.query;
+        if (query.data.type === 'query' && query.data.text) {
+          queryText = query.data.text;
+        } else if (query.data.query) {
+          queryText = query.data.query;
         } else {
           // Extract fields that might contain query text
-          queryText = Object.values(queryKernel.data)
+          queryText = Object.values(query.data)
             .filter(val => typeof val === 'string')
             .join(' ');
         }
       }
       
-      // Extract text from candidate kernel
-      let candidateText = '';
-      if (typeof candidateKernel.data === 'string') {
-        candidateText = candidateKernel.data;
-      } else if (candidateKernel.data) {
-        // For schema-typed kernels, include schema type in relevance calculation
-        if (candidateKernel.data.schemaType) {
-          candidateText += candidateKernel.data.schemaType + ' ';
+      // Extract text from entity
+      let entityText = '';
+      if (typeof entity.data === 'string') {
+        entityText = entity.data;
+      } else if (entity.data) {
+        // For schema-typed entities, include schema type in relevance calculation
+        if (entity.data.schemaType) {
+          entityText += entity.data.schemaType + ' ';
           
           // Include properties for better matching
-          if (candidateKernel.data.properties) {
-            Object.values(candidateKernel.data.properties)
+          if (entity.data.properties) {
+            Object.values(entity.data.properties)
               .filter(val => typeof val === 'string' || typeof val === 'number')
               .forEach(val => {
-                candidateText += val + ' ';
+                entityText += val + ' ';
               });
           }
         }
         
-        // For content kernels, prioritize title and content fields
-        if (candidateKernel.data.title) candidateText += candidateKernel.data.title + ' ';
-        if (candidateKernel.data.content) candidateText += candidateKernel.data.content + ' ';
-        if (candidateText.trim() === '') {
+        // For content entities, prioritize title and content fields
+        if (entity.data.title) entityText += entity.data.title + ' ';
+        if (entity.data.content) entityText += entity.data.content + ' ';
+        if (entityText.trim() === '') {
           // If no title/content, use all string fields
-          candidateText = Object.values(candidateKernel.data)
+          entityText = Object.values(entity.data)
             .filter(val => typeof val === 'string')
             .join(' ');
         }
       }
       
       // Calculate textual similarity
-      const textualScore = this.calculateTextualSimilarity(queryText, candidateText);
+      const textualScore = this.calculateTextualSimilarity(queryText, entityText);
       
-      // Calculate schema type relevance
-      const schemaScore = this.calculateSchemaTypeRelevance(queryKernel, candidateKernel);
+      // Calculate semantic similarity if schema types are available
+      const semanticScore = this.calculateSemanticSimilarity(query, entity);
       
       // Calculate temporal relevance
-      const temporalScore = this.calculateTemporalRelevance(candidateKernel);
+      const temporalScore = this.calculateTemporalRelevance(entity);
       
       // Weight and combine the scores
       const weightedScore = 
         (this.weights.textualSimilarity * textualScore) +
-        (this.weights.schemaTypeMatch * schemaScore) +
+        (this.weights.semanticSimilarity * semanticScore) +
         (this.weights.temporalRecency * temporalScore);
       
       return Math.min(1, Math.max(0, weightedScore)); // Ensure score is between 0 and 1
@@ -119,20 +121,20 @@ class RelevanceCalculator {
   
   /**
    * Apply context multipliers to base relevance score
-   * @param {number} baseRelevance - The base relevance score
+   * @param {number} baseRelevance - Base relevance score
    * @param {string} contextType - The current context type (personal, domain, general)
-   * @param {string} kernelType - The kernel type to adjust for
+   * @param {string} entityType - Entity schema.org type
    * @returns {number} The adjusted relevance score
    */
-  applyContextMultipliers(baseRelevance, contextType, kernelType) {
-    // Get the multiplier for this context and kernel type
+  applyContextMultipliers(baseRelevance, contextType, entityType) {
+    // Get the multiplier for this context and entity type
     const contextSettings = this.contextMultipliers[contextType] || this.contextMultipliers.general;
-    const multiplier = contextSettings[kernelType] || contextSettings.default;
+    const multiplier = contextSettings[entityType] || contextSettings.default;
     
     // Apply the multiplier to the base relevance
     const adjustedRelevance = baseRelevance * multiplier;
     
-    this.logger.log(`Applied context multiplier ${multiplier} for ${contextType}/${kernelType}: ${baseRelevance} → ${adjustedRelevance}`);
+    this.logger.log(`Applied context multiplier ${multiplier} for ${contextType}/${entityType}: ${baseRelevance} → ${adjustedRelevance}`);
     
     return Math.min(1, adjustedRelevance); // Cap at 1.0
   }
@@ -194,97 +196,148 @@ class RelevanceCalculator {
   }
   
   /**
-   * Calculate relevance based on schema type matching
-   * @param {Object} queryKernel - The query kernel
-   * @param {Object} candidateKernel - The candidate kernel
-   * @returns {number} Schema type relevance score
+   * Calculate semantic similarity between entities
+   * @param {Object} entity1 - First entity
+   * @param {Object} entity2 - Second entity
+   * @returns {number} - Similarity score between 0 and 1
    */
-  calculateSchemaTypeRelevance(queryKernel, candidateKernel) {
-    // Default schema score
-    let schemaScore = 0.5;
+  calculateSemanticSimilarity(entity1, entity2) {
+    // Default semantic score if no schema information
+    let semanticScore = 0.5;
     
-    // If neither has schema types, neutral score
-    if ((!queryKernel.data || !queryKernel.data.schemaType) && 
-        (!candidateKernel.data || !candidateKernel.data.schemaType)) {
-      return schemaScore;
+    // If neither has schema types, return neutral score
+    if ((!entity1.data || !entity1.data.schemaType) && 
+        (!entity2.data || !entity2.data.schemaType)) {
+      return semanticScore;
     }
     
     // Check for personal info queries
-    const isPersonalQuery = this.isPersonalInfoQuery(queryKernel);
+    const isPersonalQuery = this.isPersonalInfoQuery(entity1);
     
-    // If candidate is a Person kernel and this is a personal query, high relevance
-    if (candidateKernel.data && 
-        candidateKernel.data.schemaType === 'Person' && 
+    // If entity2 is a Person entity and this is a personal query, high relevance
+    if (entity2.data && 
+        entity2.data.schemaType === 'Person' && 
         isPersonalQuery) {
       return 0.95;
     }
     
-    // If we have schema types for both, check if they match or are related
-    if (queryKernel.data && 
-        queryKernel.data.semantics && 
-        queryKernel.data.semantics.entities && 
-        candidateKernel.data && 
-        candidateKernel.data.schemaType) {
-      
-      // Look for entities in the query that match the candidate's schema type
-      const matchingEntities = queryKernel.data.semantics.entities.filter(entity => 
-        entity.type === candidateKernel.data.schemaType
-      );
-      
-      if (matchingEntities.length > 0) {
-        schemaScore = 0.9; // High relevance for matching schema types
+    // If we have schema types for both, calculate schema-based similarity
+    if (entity1.data && entity2.data && entity2.data.schemaType) {
+      // Check if entity1 has semantic entities
+      if (entity1.data.semantics && entity1.data.semantics.entities) {
+        // Look for entities in entity1 that match entity2's schema type
+        const matchingEntities = entity1.data.semantics.entities.filter(e => 
+          e.type === entity2.data.schemaType
+        );
+        
+        if (matchingEntities.length > 0) {
+          semanticScore = 0.9; // High relevance for matching schema types
+        }
+      } else if (entity1.data.schemaType) {
+        // If entity1 also has a schema type, compare schema types
+        if (entity1.data.schemaType === entity2.data.schemaType) {
+          semanticScore = 0.9; // High relevance for exact type match
+        } else {
+          // Check for related schema types (superclass/subclass)
+          const relatedTypes = this.getRelatedSchemaTypes(entity1.data.schemaType);
+          if (relatedTypes.includes(entity2.data.schemaType)) {
+            semanticScore = 0.7; // Good relevance for related types
+          }
+        }
       } else {
-        // Check if the query mentions the schema type name
-        const queryText = queryKernel.data.text || '';
-        if (queryText.toLowerCase().includes(candidateKernel.data.schemaType.toLowerCase())) {
-          schemaScore = 0.8; // Good relevance for mentioned schema types
+        // Check if entity1 text mentions entity2's schema type
+        const entity1Text = typeof entity1.data === 'string' ? 
+                           entity1.data : 
+                           JSON.stringify(entity1.data);
+                           
+        if (entity1Text.toLowerCase().includes(entity2.data.schemaType.toLowerCase())) {
+          semanticScore = 0.8; // Good relevance for mentioned schema types
+        }
+      }
+      
+      // If entity2 has properties that match entity1's query terms, increase score
+      if (entity2.data.properties && entity1.data.text) {
+        const queryTerms = entity1.data.text.toLowerCase().split(/\W+/).filter(w => w.length > 2);
+        let propertyMatchCount = 0;
+        
+        Object.values(entity2.data.properties).forEach(propValue => {
+          if (typeof propValue === 'string') {
+            const propTerms = propValue.toLowerCase().split(/\W+/).filter(w => w.length > 2);
+            queryTerms.forEach(term => {
+              if (propTerms.includes(term)) propertyMatchCount++;
+            });
+          }
+        });
+        
+        if (propertyMatchCount > 0) {
+          const propertyBoost = Math.min(0.3, propertyMatchCount * 0.1);
+          semanticScore = Math.min(1.0, semanticScore + propertyBoost);
         }
       }
     }
     
-    return schemaScore;
+    return semanticScore;
   }
   
   /**
-   * Calculate temporal relevance based on kernel recency
-   * @param {Object} candidateKernel - The candidate kernel
+   * Get related schema.org types for a given type
+   * @param {string} schemaType - The schema.org type
+   * @returns {Array} - List of related types
+   */
+  getRelatedSchemaTypes(schemaType) {
+    // This is a simplified implementation - in a real system, 
+    // this would use a full schema.org ontology
+    const relatedTypesMap = {
+      'Person': ['Organization', 'User', 'Contact', 'Author'],
+      'Organization': ['Corporation', 'LocalBusiness', 'Person', 'Company'],
+      'CreativeWork': ['Article', 'Book', 'BlogPosting', 'WebPage'],
+      'Place': ['LocalBusiness', 'Address', 'Location'],
+      // Add more related types as needed
+    };
+    
+    return relatedTypesMap[schemaType] || [];
+  }
+  
+  /**
+   * Calculate temporal relevance based on entity recency
+   * @param {Object} entity - The entity
    * @param {number} recencyThreshold - The recency threshold in milliseconds (default 1 hour)
    * @returns {number} Temporal relevance score
    */
-  calculateTemporalRelevance(candidateKernel, recencyThreshold = 60 * 60 * 1000) {
-    // Check if kernel has timestamp
-    if (!candidateKernel.data || !candidateKernel.data.timestamp) {
-      return 0.5; // Neutral score for kernels without timestamp
+  calculateTemporalRelevance(entity, recencyThreshold = 60 * 60 * 1000) {
+    // Check if entity has timestamp
+    if (!entity.data || !entity.data.timestamp) {
+      return 0.5; // Neutral score for entities without timestamp
     }
     
     const now = Date.now();
-    const kernelTime = candidateKernel.data.timestamp;
-    const age = now - kernelTime;
+    const entityTime = entity.data.timestamp;
+    const age = now - entityTime;
     
-    // For very recent kernels (within threshold), high score
+    // For very recent entities (within threshold), high score
     if (age <= recencyThreshold) {
       // Linear decay within the threshold
       return 1.0 - (age / recencyThreshold) * 0.3; // Scale from 1.0 to 0.7
     }
     
-    // For older kernels, logarithmic decay
-    // This ensures older kernels don't drop too drastically in relevance
+    // For older entities, logarithmic decay
+    // This ensures older entities don't drop too drastically in relevance
     const ageInHours = age / (60 * 60 * 1000);
     return Math.max(0.3, 0.7 - (0.1 * Math.log10(ageInHours + 1)));
   }
   
   /**
    * Checks if a query is asking for personal information
-   * @param {Object} queryKernel - The query kernel
+   * @param {Object} query - The query object
    * @returns {boolean} Whether this is a personal info query
    */
-  isPersonalInfoQuery(queryKernel) {
+  isPersonalInfoQuery(query) {
     // Extract query text
     let queryText = '';
-    if (typeof queryKernel.data === 'string') {
-      queryText = queryKernel.data;
-    } else if (queryKernel.data) {
-      queryText = queryKernel.data.text || JSON.stringify(queryKernel.data);
+    if (typeof query.data === 'string') {
+      queryText = query.data;
+    } else if (query.data) {
+      queryText = query.data.text || JSON.stringify(query.data);
     }
     
     // Personal info query patterns
@@ -305,23 +358,23 @@ class RelevanceCalculator {
   
   /**
    * Calculate overall relevance with context awareness
-   * @param {Object} queryKernel - The query kernel
-   * @param {Object} candidateKernel - The candidate kernel
+   * @param {Object} query - The query (can be text or structured)
+   * @param {Object} entity - The entity to evaluate
    * @param {Object} contextInfo - Additional context information
    * @returns {number} The final relevance score
    */
-  calculateRelevance(queryKernel, candidateKernel, contextInfo = {}) {
+  calculateRelevance(query, entity, contextInfo = {}) {
     // Calculate base relevance
-    const baseRelevance = this.calculateBaseRelevance(queryKernel, candidateKernel);
+    const baseRelevance = this.calculateBaseRelevance(query, entity);
     
-    // Extract context type and kernel type
+    // Extract context type and entity type
     const contextType = contextInfo.contextType || 'general';
-    const kernelType = candidateKernel.data && candidateKernel.data.schemaType 
-      ? candidateKernel.data.schemaType 
+    const entityType = entity.data && entity.data.schemaType 
+      ? entity.data.schemaType 
       : 'default';
     
     // Apply context multipliers
-    const adjustedRelevance = this.applyContextMultipliers(baseRelevance, contextType, kernelType);
+    const adjustedRelevance = this.applyContextMultipliers(baseRelevance, contextType, entityType);
     
     // Apply any attention weights if provided
     if (contextInfo.attentionWeight && typeof contextInfo.attentionWeight === 'number') {
@@ -330,6 +383,28 @@ class RelevanceCalculator {
     }
     
     return adjustedRelevance;
+  }
+  
+  /**
+   * Sorts entities by relevance
+   * @param {Array} entities - Entities to sort
+   * @param {Object} query - The query
+   * @param {Object} contextInfo - Context information
+   * @returns {Array} - Sorted entities with relevance scores
+   */
+  sortByRelevance(entities, query, contextInfo = {}) {
+    // Calculate relevance for each entity and add the score
+    const scoredEntities = entities.map(entity => {
+      const score = this.calculateRelevance(query, entity, contextInfo);
+      return { entity, score };
+    });
+    
+    // Sort by score in descending order
+    scoredEntities.sort((a, b) => b.score - a.score);
+    
+    this.logger.log(`Sorted ${entities.length} entities by relevance`);
+    
+    return scoredEntities;
   }
 }
 

@@ -1,12 +1,71 @@
 // entity-extractor.js
-// Extracts entities from user input for schema-based semantic understanding
+// Extracts entities from user input for schema.org-based semantic understanding
 
 /**
- * EntityExtractor class handles extraction of schema-aligned entities from text
+ * EntityExtractor class handles extraction of schema.org-aligned entities from text
  */
 class EntityExtractor {
   constructor() {
     this.logger = console; // Logger (can be replaced with a custom one)
+    
+    // Define extraction patterns for different entity types
+    this.entityPatterns = {
+      person: [
+        { regex: /my name is\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' },
+        { regex: /i am\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' },
+        { regex: /call me\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' },
+        { regex: /i'm\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' },
+        { regex: /this is\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' },
+        { regex: /i am\s+(\d+)(?:\s+years old)?/i, property: 'age' },
+        { regex: /i'm\s+(\d+)(?:\s+years old)?/i, property: 'age' },
+        { regex: /my age is\s+(\d+)/i, property: 'age' },
+        { regex: /i am (\d+)(?:\s+years)?(?:\s+old)?/i, property: 'age' }
+      ],
+      location: [
+        { regex: /i(?:'m| am) from\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i, property: 'location' },
+        { regex: /i live in\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i, property: 'location' },
+        { regex: /my location is\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i, property: 'location' },
+        { regex: /my home is in\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i, property: 'location' },
+        { regex: /i(?:'m| am) in\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i, property: 'location' }
+      ],
+      organization: [
+        { regex: /i work (?:at|for)\s+([a-zA-Z\s,\.]+)(?:\.|\,|\s|$)/i, property: 'worksFor' },
+        { regex: /i(?:'m| am) employed (?:at|by)\s+([a-zA-Z\s,\.]+)(?:\.|\,|\s|$)/i, property: 'worksFor' },
+        { regex: /my company is\s+([a-zA-Z\s,\.]+)(?:\.|\,|\s|$)/i, property: 'worksFor' }
+      ],
+      dateTime: [
+        { regex: /(?:on|for)\s+((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?)/i, property: 'date' },
+        { regex: /(?:at|around)\s+(\d{1,2}(?::\d{2})?(?:\s*[ap]\.?m\.?)?)/i, property: 'time' }
+      ],
+      product: [
+        { regex: /(?:bought|purchased|ordered)\s+(?:a|an|the)\s+([a-zA-Z0-9\s,\.]+)(?:\.|\,|\s|$)/i, property: 'name' },
+        { regex: /looking for (?:a|an|the)\s+([a-zA-Z0-9\s,\.]+)(?:\.|\,|\s|$)/i, property: 'name' }
+      ]
+    };
+  }
+  
+  /**
+   * Extracts entities from user input and adds them to the semantics object
+   * @param {string} userInput - The raw user input text
+   * @param {Object} semantics - The semantic structure to populate
+   */
+  extractEntities(userInput, semantics) {
+    this.logger.log(`Extracting entities from: "${userInput}"`);
+    
+    // Ensure entities array exists in semantics
+    if (!semantics.entities) {
+      semantics.entities = [];
+    }
+    
+    // Extract different types of entities
+    this.extractPersonInfo(userInput, semantics);
+    this.extractLocationInfo(userInput, semantics);
+    this.extractOrganizationInfo(userInput, semantics);
+    this.extractDateTimeInfo(userInput, semantics);
+    this.extractProductInfo(userInput, semantics);
+    this.extractQuestionInfo(userInput, semantics);
+    
+    this.logger.log(`Extracted ${semantics.entities.length} entities from user input`);
   }
   
   /**
@@ -15,37 +74,10 @@ class EntityExtractor {
    * @param {Object} semantics - The semantic structure to populate
    */
   extractPersonInfo(userInput, semantics) {
-    // Check for name introduction patterns - enhanced with more variations
-    const nameIntroPatterns = [
-      { regex: /my name is\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' },
-      { regex: /i am\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' },
-      { regex: /call me\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' },
-      { regex: /i'm\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' },
-      { regex: /this is\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i, property: 'name' }
-    ];
-    
-    // Check for age patterns - enhanced with more variations
-    const agePatterns = [
-      { regex: /i am\s+(\d+)(?:\s+years old)?/i, property: 'age' },
-      { regex: /i'm\s+(\d+)(?:\s+years old)?/i, property: 'age' },
-      { regex: /my age is\s+(\d+)/i, property: 'age' },
-      { regex: /i am (\d+)(?:\s+years)?(?:\s+old)?/i, property: 'age' }
-    ];
-    
-    // Check for location patterns - enhanced with more variations
-    const locationPatterns = [
-      { regex: /i(?:'m| am) from\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i, property: 'location' },
-      { regex: /i live in\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i, property: 'location' },
-      { regex: /my location is\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i, property: 'location' },
-      { regex: /my home is in\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i, property: 'location' }
-    ];
-    
-    // Process all patterns
-    const allPatterns = [...nameIntroPatterns, ...agePatterns, ...locationPatterns];
-    
     let personEntity = null;
     
-    for (const pattern of allPatterns) {
+    // Process all person pattern matches
+    for (const pattern of this.entityPatterns.person) {
       const match = userInput.match(pattern.regex);
       if (match && match[1]) {
         // Create person entity if it doesn't exist yet
@@ -54,31 +86,200 @@ class EntityExtractor {
             type: 'Person',
             id: `person_${Date.now()}`,
             properties: {},
-            timestamp: Date.now() // Add timestamp for recency tracking
+            confidence: 0.9,
+            source: 'user_input',
+            timestamp: Date.now()
           };
           semantics.entities.push(personEntity);
           
-          // Add relationship between the speaker and this person
-          semantics.relationships.push({
-            type: 'isSpeaker',
-            source: personEntity.id,
-            target: 'conversation'
-          });
+          // If this is new personal info, add an inform intent
+          if (!semantics.intents.some(intent => intent.type === 'inform' && intent.category === 'personal_info')) {
+            semantics.intents.push({ 
+              type: 'inform', 
+              confidence: 0.95,
+              category: 'personal_info' 
+            });
+          }
           
-          // Add a strong inform intent when personal info is detected
-          semantics.intents.push({ 
-            type: 'inform', 
-            confidence: 0.95,
-            category: 'personal_info' 
-          });
-          
-          this.logger.log(`Created Person entity with ID: ${personEntity.id} and added inform intent with confidence 0.95`);
+          this.logger.log(`Created Person entity with ID: ${personEntity.id}`);
         }
         
         // Add the matched property
         const value = pattern.property === 'age' ? parseInt(match[1]) : match[1].trim();
         personEntity.properties[pattern.property] = value;
         this.logger.log(`Added ${pattern.property} = "${value}" to Person entity`);
+      }
+    }
+  }
+  
+  /**
+   * Extract location information from user input
+   * @param {string} userInput - The raw user input
+   * @param {Object} semantics - The semantic structure to populate
+   */
+  extractLocationInfo(userInput, semantics) {
+    let locationEntity = null;
+    
+    // Process all location pattern matches
+    for (const pattern of this.entityPatterns.location) {
+      const match = userInput.match(pattern.regex);
+      if (match && match[1]) {
+        // Create location entity if it doesn't exist yet
+        if (!locationEntity) {
+          locationEntity = {
+            type: 'Place',
+            id: `place_${Date.now()}`,
+            properties: {},
+            confidence: 0.85,
+            source: 'user_input',
+            timestamp: Date.now()
+          };
+          semantics.entities.push(locationEntity);
+          
+          this.logger.log(`Created Place entity with ID: ${locationEntity.id}`);
+        }
+        
+        // Add the matched property - usually this will be the address or name
+        locationEntity.properties[pattern.property || 'address'] = match[1].trim();
+        this.logger.log(`Added ${pattern.property || 'address'} = "${match[1].trim()}" to Place entity`);
+        
+        // If we're talking about the user's location, add a relationship to the Person entity
+        const personEntity = semantics.entities.find(e => e.type === 'Person');
+        if (personEntity) {
+          if (!semantics.relationships) {
+            semantics.relationships = [];
+          }
+          
+          semantics.relationships.push({
+            type: 'homeLocation',
+            source: personEntity.id,
+            target: locationEntity.id,
+            confidence: 0.8
+          });
+          
+          this.logger.log(`Added homeLocation relationship between Person and Place`);
+        }
+      }
+    }
+  }
+  
+  /**
+   * Extract organization information from user input
+   * @param {string} userInput - The raw user input
+   * @param {Object} semantics - The semantic structure to populate
+   */
+  extractOrganizationInfo(userInput, semantics) {
+    let organizationEntity = null;
+    
+    // Process all organization pattern matches
+    for (const pattern of this.entityPatterns.organization) {
+      const match = userInput.match(pattern.regex);
+      if (match && match[1]) {
+        // Create organization entity if it doesn't exist yet
+        if (!organizationEntity) {
+          organizationEntity = {
+            type: 'Organization',
+            id: `organization_${Date.now()}`,
+            properties: {},
+            confidence: 0.8,
+            source: 'user_input',
+            timestamp: Date.now()
+          };
+          semantics.entities.push(organizationEntity);
+          
+          this.logger.log(`Created Organization entity with ID: ${organizationEntity.id}`);
+        }
+        
+        // Add the matched property - usually this will be the name
+        organizationEntity.properties['name'] = match[1].trim();
+        this.logger.log(`Added name = "${match[1].trim()}" to Organization entity`);
+        
+        // If the user mentioned they work for this organization, add a relationship to the Person entity
+        if (pattern.property === 'worksFor') {
+          const personEntity = semantics.entities.find(e => e.type === 'Person');
+          if (personEntity) {
+            if (!semantics.relationships) {
+              semantics.relationships = [];
+            }
+            
+            semantics.relationships.push({
+              type: 'worksFor',
+              source: personEntity.id,
+              target: organizationEntity.id,
+              confidence: 0.85
+            });
+            
+            this.logger.log(`Added worksFor relationship between Person and Organization`);
+          }
+        }
+      }
+    }
+  }
+  
+  /**
+   * Extract date and time information from user input
+   * @param {string} userInput - The raw user input
+   * @param {Object} semantics - The semantic structure to populate
+   */
+  extractDateTimeInfo(userInput, semantics) {
+    let dateTimeEntity = null;
+    
+    // Process all dateTime pattern matches
+    for (const pattern of this.entityPatterns.dateTime) {
+      const match = userInput.match(pattern.regex);
+      if (match && match[1]) {
+        // Create dateTime entity if it doesn't exist yet
+        if (!dateTimeEntity) {
+          dateTimeEntity = {
+            type: 'DateTime',
+            id: `datetime_${Date.now()}`,
+            properties: {},
+            confidence: 0.75,
+            source: 'user_input',
+            timestamp: Date.now()
+          };
+          semantics.entities.push(dateTimeEntity);
+          
+          this.logger.log(`Created DateTime entity with ID: ${dateTimeEntity.id}`);
+        }
+        
+        // Add the matched property
+        dateTimeEntity.properties[pattern.property] = match[1].trim();
+        this.logger.log(`Added ${pattern.property} = "${match[1].trim()}" to DateTime entity`);
+      }
+    }
+  }
+  
+  /**
+   * Extract product information from user input
+   * @param {string} userInput - The raw user input
+   * @param {Object} semantics - The semantic structure to populate
+   */
+  extractProductInfo(userInput, semantics) {
+    let productEntity = null;
+    
+    // Process all product pattern matches
+    for (const pattern of this.entityPatterns.product) {
+      const match = userInput.match(pattern.regex);
+      if (match && match[1]) {
+        // Create product entity if it doesn't exist yet
+        if (!productEntity) {
+          productEntity = {
+            type: 'Product',
+            id: `product_${Date.now()}`,
+            properties: {},
+            confidence: 0.7,
+            source: 'user_input',
+            timestamp: Date.now()
+          };
+          semantics.entities.push(productEntity);
+          
+          this.logger.log(`Created Product entity with ID: ${productEntity.id}`);
+        }
+        
+        // Add the matched property
+        productEntity.properties[pattern.property] = match[1].trim();
+        this.logger.log(`Added ${pattern.property} = "${match[1].trim()}" to Product entity`);
       }
     }
   }
@@ -105,18 +306,22 @@ class EntityExtractor {
         properties: {
           text: userInput
         },
-        timestamp: Date.now() // Add timestamp for recency
+        confidence: 0.9,
+        source: 'user_input',
+        timestamp: Date.now()
       };
       
       semantics.entities.push(questionEntity);
       
       // Add a strong question intent when a question is detected
-      semantics.intents.push({ 
-        type: 'question', 
-        confidence: 0.95 
-      });
+      if (!semantics.intents.some(intent => intent.type === 'question')) {
+        semantics.intents.push({ 
+          type: 'question', 
+          confidence: 0.95 
+        });
+      }
       
-      this.logger.log(`Created Question entity with ID: ${questionEntity.id} and added question intent with confidence 0.95`);
+      this.logger.log(`Created Question entity with ID: ${questionEntity.id}`);
       
       // Enhanced patterns for detecting what the question is about
       const aboutPatterns = [
@@ -144,16 +349,24 @@ class EntityExtractor {
               id: `topic_${Date.now()}`,
               properties: {
                 name: match[1].trim()
-              }
+              },
+              confidence: 0.8,
+              source: 'user_input',
+              timestamp: Date.now()
             };
             
             semantics.entities.push(topicEntity);
             
             // Add relationship between question and topic
+            if (!semantics.relationships) {
+              semantics.relationships = [];
+            }
+            
             semantics.relationships.push({
               type: 'isAbout',
               source: questionEntity.id,
-              target: topicEntity.id
+              target: topicEntity.id,
+              confidence: 0.85
             });
           }
           
@@ -187,12 +400,12 @@ class EntityExtractor {
    * @param {Object} semantics - The semantic structure to populate
    */
   extractTopicInfo(userInput, semantics) {
-    // Keywords that might indicate topics - expanded domain keywords
+    // Keywords that might indicate general topics of interest
     const topicKeywords = [
-      'UOR', 'framework', 'bot', 'knowledge', 'semantic', 'context',
-      'memory', 'token', 'limit', 'traversal', 'lattice', 'kernel',
-      'schema', 'entity', 'property', 'relationship', 'inference',
-      'graph', 'query', 'search', 'relevance', 'embedding'
+      'politics', 'science', 'technology', 'health', 'sports',
+      'education', 'finance', 'entertainment', 'art', 'music',
+      'history', 'travel', 'food', 'fashion', 'business',
+      'environment', 'religion', 'culture', 'economy', 'literature'
     ];
     
     // Check if any topic keywords are present
@@ -208,7 +421,9 @@ class EntityExtractor {
         properties: {
           name: topic
         },
-        timestamp: Date.now() // Add timestamp
+        confidence: 0.7,
+        source: 'user_input',
+        timestamp: Date.now()
       };
       
       semantics.entities.push(topicEntity);

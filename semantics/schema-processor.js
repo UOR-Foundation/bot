@@ -1,23 +1,22 @@
 // schema-processor.js
-// Enhanced implementation that coordinates schema.org-based semantic processing
-// with improved personal information extraction and context awareness
+// Processes user input using schema.org semantic understanding
 
 import EntityExtractor from './entity-extractor.js';
 import IntentClassifier from './intent-classifier.js';
 import PersonalInfoManager from './personal-info-manager.js';
-import KernelCreator from './kernel-creator.js';
+import SchemaMapper from './schema-mapper.js';
 
 /**
  * SchemaProcessor class coordinates schema.org aligned semantic processing
  * for natural language understanding and knowledge representation
  */
 class SchemaProcessor {
-    constructor(uorCortex) {
-      this.uorCortex = uorCortex; // Reference to the UOR Cortex for creating/linking kernels
+    constructor(knowledgeGraph) {
+      this.knowledgeGraph = knowledgeGraph; // Reference to the knowledge graph
       this.entityExtractor = new EntityExtractor(); // Extracts entities from text
       this.intentClassifier = new IntentClassifier(); // Classifies user intents
-      this.personalInfoManager = new PersonalInfoManager(uorCortex); // Handles personal info
-      this.kernelCreator = new KernelCreator(uorCortex); // Creates kernels from entities
+      this.personalInfoManager = new PersonalInfoManager(knowledgeGraph); // Handles personal info
+      this.schemaMapper = new SchemaMapper(); // Maps entities to schema.org types
       this.logger = console; // Logger (can be replaced with a custom one)
       
       this.previousContext = null; // Store previous conversational context
@@ -26,9 +25,10 @@ class SchemaProcessor {
     /**
      * Process user query using schema-based semantics
      * @param {string} userQuery - The user's input
-     * @returns {Object} The query kernel, semantic information, and created kernels
+     * @param {Object} options - Processing options
+     * @returns {Object} The query semantics, entities, and context
      */
-    processQuery(userQuery) {
+    processQuery(userQuery, options = {}) {
       this.logger.log(`Processing query with schema semantics: "${userQuery}"`);
       
       // Parse user input to extract semantic information
@@ -48,34 +48,19 @@ class SchemaProcessor {
       }
       this.previousContext = contextType;
       
-      // Create kernels based on the semantic entities
-      const createdKernels = this.kernelCreator.createKernelsFromSemantics(semantics);
+      // Map extracted entities to schema.org types
+      const schemaEntities = this.mapToSchemaTypes(semantics.entities);
       
-      // Create a query kernel
-      const queryKernel = this.kernelCreator.createQueryKernel(userQuery, semantics);
-      
-      // Link the query kernel to created entity kernels
-      this.kernelCreator.linkQueryToEntities(queryKernel, createdKernels);
-      
-      // Special handling for personal info
-      const personalInfo = this.getPersonalInfoFromStatement(userQuery, semantics);
-      if (personalInfo) {
-        // Store personal info in the UOR knowledge graph
-        const personalInfoKernel = this.storePersonalInfo(personalInfo);
-        // Link this info to the query
-        if (personalInfoKernel && queryKernel) {
-          this.uorCortex.linkObjects(
-            queryKernel.kernelReference,
-            personalInfoKernel.kernelReference,
-            'contains'
-          );
-        }
+      // Create knowledge graph entities if needed
+      let createdEntities = [];
+      if (options.createEntities !== false) {
+        createdEntities = this.createEntitiesFromSemantics(semantics, schemaEntities);
       }
       
       return {
-        queryKernel,
         semantics,
-        createdKernels,
+        schemaEntities,
+        createdEntities,
         contextType
       };
     }
@@ -104,6 +89,12 @@ class SchemaProcessor {
         // Extract question information with better personal question detection
         this.entityExtractor.extractQuestionInfo(userInput, semantics);
         
+        // Extract location information
+        this.entityExtractor.extractLocationInfo(userInput, semantics);
+        
+        // Extract date and time information
+        this.entityExtractor.extractDateTimeInfo(userInput, semantics);
+        
         // Extract topic information
         this.entityExtractor.extractTopicInfo(userInput, semantics);
         
@@ -116,6 +107,93 @@ class SchemaProcessor {
       }
       
       return semantics;
+    }
+    
+    /**
+     * Maps extracted entities to schema.org types
+     * @param {Array} entities - The extracted entities
+     * @returns {Array} Schema.org compatible entities
+     */
+    mapToSchemaTypes(entities) {
+      return entities.map(entity => this.schemaMapper.mapEntityToSchema(entity));
+    }
+    
+    /**
+     * Creates knowledge graph entities from processed semantics
+     * @param {Object} semantics - The semantic structure
+     * @param {Array} schemaEntities - The schema.org mapped entities
+     * @param {string} source - Source of the information
+     * @returns {Array} Created/updated entities
+     */
+    createEntitiesFromSemantics(semantics, schemaEntities, source = 'user') {
+      const createdEntities = [];
+      
+      try {
+        this.logger.log(`Creating entities from semantics with ${schemaEntities.length} schema entities`);
+        
+        // Create entities in the knowledge graph
+        for (const entity of schemaEntities) {
+          // Calculate confidence based on extraction quality
+          const confidence = entity.confidence || 0.8;
+          
+          // Create the entity in the knowledge graph
+          const createdEntity = this.knowledgeGraph.createEntity(entity, source, confidence);
+          createdEntities.push(createdEntity);
+          
+          this.logger.log(`Created ${entity['@type']} entity: ${JSON.stringify(createdEntity.id)}`);
+        }
+        
+        // Create relationships between entities
+        this.createRelationshipsFromSemantics(semantics, createdEntities, source);
+        
+      } catch (error) {
+        this.logger.error(`Error creating entities from semantics: ${error.message}`);
+      }
+      
+      return createdEntities;
+    }
+    
+    /**
+     * Creates relationships between entities based on semantics
+     * @param {Object} semantics - The semantic structure
+     * @param {Array} createdEntities - The created entities
+     * @param {string} source - Source of the information
+     * @returns {Array} Created relationships
+     */
+    createRelationshipsFromSemantics(semantics, createdEntities, source = 'user') {
+      const createdRelationships = [];
+      
+      // Map of entity IDs for quick lookup
+      const entityMap = new Map();
+      createdEntities.forEach(entity => {
+        if (entity.sourceId) {
+          entityMap.set(entity.sourceId, entity.id);
+        }
+      });
+      
+      // Create relationships from semantics.relationships
+      for (const relationship of semantics.relationships) {
+        const sourceEntityId = entityMap.get(relationship.source);
+        const targetEntityId = entityMap.get(relationship.target);
+        
+        if (sourceEntityId && targetEntityId) {
+          const relType = this.schemaMapper.mapRelationshipType(relationship.type);
+          const confidence = relationship.confidence || 0.7;
+          
+          const createdRelationship = this.knowledgeGraph.createRelationship(
+            sourceEntityId,
+            targetEntityId,
+            relType,
+            source,
+            confidence
+          );
+          
+          createdRelationships.push(createdRelationship);
+          this.logger.log(`Created relationship: ${sourceEntityId} -[${relType}]-> ${targetEntityId}`);
+        }
+      }
+      
+      return createdRelationships;
     }
     
     /**
@@ -185,9 +263,9 @@ class SchemaProcessor {
     hasDomainContext(semantics) {
       // Domain keywords that indicate technical or domain-specific queries
       const domainKeywords = [
-        'uor', 'framework', 'kernel', 'schema', 'context', 'bot', 
-        'lattice', 'traversal', 'graph', 'semantic', 'database',
-        'token', 'limit', 'memory', 'knowledge'
+        'algorithm', 'database', 'function', 'class', 'object', 
+        'system', 'program', 'code', 'api', 'interface',
+        'network', 'server', 'process', 'application', 'technology'
       ];
       
       // Check if original text contains domain keywords
@@ -230,9 +308,9 @@ class SchemaProcessor {
     }
     
     /**
-     * Store personal information in the UOR graph
+     * Store personal information in the knowledge graph
      * @param {Object} personalInfo - The personal information to store
-     * @returns {Object} The created or updated kernel
+     * @returns {Object} The created or updated entity
      */
     storePersonalInfo(personalInfo) {
       return this.personalInfoManager.storePersonalInfo(personalInfo);
@@ -258,5 +336,5 @@ class SchemaProcessor {
       return this.intentClassifier.hasIntent(semantics, intentType, confidenceThreshold);
     }
 }
-  
+
 export default SchemaProcessor;

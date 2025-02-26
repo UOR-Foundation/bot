@@ -1,276 +1,250 @@
 // personal-response.js
-// Specialized response generation for personal contexts
+// Specialized response generation for personal contexts.
 
 /**
- * PersonalResponseGenerator class handles generating responses for personal information queries
- * and statements within the UOR framework
+ * PersonalResponseGenerator class handles generating responses for personal contexts
  */
 class PersonalResponseGenerator {
-  /**
-   * Constructor initializes the response generator
-   * @param {Object} uorCortex - Reference to the UOR Cortex
-   */
   constructor(uorCortex) {
     this.uorCortex = uorCortex;
     this.logger = console; // Logger (can be replaced with a custom one)
   }
-
-  /**
-   * Generates a response for personal information queries
-   * @param {Object} personalInfo - Personal information to include in the response
-   * @param {Object} options - Optional configuration parameters
-   * @returns {string} - Personalized response
-   */
-  generatePersonalInfoResponse(personalInfo, options = {}) {
-    this.logger.log(`Generating personal info response for property: ${personalInfo.property}`);
-    
-    if (!personalInfo || !personalInfo.property) {
-      return "I don't have that personal information about you yet.";
-    }
-    
-    // Handle different personal properties with natural language variations
-    switch (personalInfo.property) {
-      case 'name':
-        return this.createNameResponse(personalInfo.value, options);
-      case 'age':
-        return this.createAgeResponse(personalInfo.value, options);
-      case 'location':
-        return this.createLocationResponse(personalInfo.value, options);
-      default:
-        return `I know that your ${personalInfo.property} is ${personalInfo.value}.`;
-    }
-  }
   
   /**
-   * Creates a personalized response about the user's name
-   * @param {string} name - The user's name
-   * @param {Object} options - Optional configuration parameters
-   * @returns {string} - Personalized name response
-   */
-  createNameResponse(name, options = {}) {
-    // Add some variation to the responses
-    const responses = [
-      `Your name is ${name}.`,
-      `You told me your name is ${name}.`,
-      `I remember that you're ${name}.`
-    ];
-    
-    // Select a response based on options or randomly
-    if (options.formal) {
-      return responses[0];
-    } else if (options.casual) {
-      return responses[2];
-    } else {
-      return responses[Math.floor(Math.random() * responses.length)];
-    }
-  }
-  
-  /**
-   * Creates a personalized response about the user's age
-   * @param {number|string} age - The user's age
-   * @param {Object} options - Optional configuration parameters
-   * @returns {string} - Personalized age response
-   */
-  createAgeResponse(age, options = {}) {
-    const responses = [
-      `You are ${age} years old.`,
-      `You told me you're ${age} years old.`,
-      `I have your age recorded as ${age}.`
-    ];
-    
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-  
-  /**
-   * Creates a personalized response about the user's location
-   * @param {string} location - The user's location
-   * @param {Object} options - Optional configuration parameters
-   * @returns {string} - Personalized location response
-   */
-  createLocationResponse(location, options = {}) {
-    const responses = [
-      `You're from ${location}.`,
-      `You told me you're from ${location}.`,
-      `I have your location saved as ${location}.`
-    ];
-    
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-
-  /**
-   * Generates a greeting response based on semantic understanding
+   * Generate a personal response based on context and semantics
+   * @param {Object} context - Context information
    * @param {Object} semantics - Semantic understanding of the query
-   * @param {string} userName - The user's name if available
-   * @returns {string} - Appropriate greeting response
+   * @returns {string} Generated personal response
+   */
+  generatePersonalResponse(context, semantics) {
+    this.logger.log(`Generating personal response`);
+    
+    // Ensure semantics and context are valid
+    if (!semantics) semantics = { original: "", intents: [] };
+    if (!context) context = { aggregatedKernels: [] };
+    
+    // Get the query text from semantics
+    const queryText = semantics.original || "";
+    
+    // Get the primary intent
+    const primaryIntent = this.getPrimaryIntent(semantics);
+    
+    // First check for personal info questions
+    if (this.isPersonalInfoQuestion(queryText)) {
+      return this.generatePersonalInfoResponse(this.extractPersonalInfo(context));
+    }
+    
+    // Check for greetings
+    if (primaryIntent === 'greet') {
+      return this.generateGreetingResponse(semantics, this.extractUserName(context));
+    }
+    
+    // Check for information sharing
+    if (primaryIntent === 'inform') {
+      return this.generateAcknowledgementResponse(semantics, this.extractPersonalInfo(context));
+    }
+    
+    // Default response for personal context
+    return "I'm here to help with any personal information or questions you might have. Is there something specific you'd like to know or share?";
+  }
+  
+  /**
+   * Generate a response to a personal info question
+   * @param {Object} personalInfo - The extracted personal info
+   * @returns {string} The response
+   */
+  generatePersonalInfoResponse(personalInfo) {
+    this.logger.log(`Generating personal info response with: ${JSON.stringify(personalInfo)}`);
+    
+    // If no personal info found
+    if (!personalInfo || Object.keys(personalInfo).length === 0) {
+      return "I don't have that information about you yet. Would you like to share it?";
+    }
+    
+    // Handle different properties
+    if (personalInfo.name) {
+      return `Your name is ${personalInfo.name}.`;
+    } else if (personalInfo.age) {
+      return `You are ${personalInfo.age} years old.`;
+    } else if (personalInfo.location) {
+      return `You are from ${personalInfo.location}.`;
+    } else {
+      // If there is some other personal info, return it
+      const property = Object.keys(personalInfo)[0];
+      return `Your ${property} is ${personalInfo[property]}.`;
+    }
+  }
+  
+  /**
+   * Generate a greeting response
+   * @param {Object} semantics - The semantic understanding
+   * @param {string} userName - The user's name if known
+   * @returns {string} The greeting response
    */
   generateGreetingResponse(semantics, userName) {
-    this.logger.log(`Generating greeting response${userName ? ' for ' + userName : ''}`);
+    this.logger.log(`Generating greeting response for user: ${userName || 'unknown'}`);
     
-    // Time-aware greetings
-    const currentHour = new Date().getHours();
-    let timeGreeting = "Hello";
+    const greetings = [
+      "Hello there!",
+      "Hi!",
+      "Greetings!",
+      "Hello!"
+    ];
     
-    if (currentHour >= 5 && currentHour < 12) {
-      timeGreeting = "Good morning";
-    } else if (currentHour >= 12 && currentHour < 18) {
-      timeGreeting = "Good afternoon";
-    } else if (currentHour >= 18 && currentHour < 22) {
-      timeGreeting = "Good evening";
-    }
+    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
     
-    // If we know the user's name, personalize the greeting
     if (userName) {
-      const greetings = [
-        `${timeGreeting}, ${userName}! How can I help you today?`,
-        `${timeGreeting}, ${userName}! It's good to see you again.`,
-        `Hello ${userName}! How can I assist you?`
-      ];
-      return greetings[Math.floor(Math.random() * greetings.length)];
+      return `${greeting} Nice to see you, ${userName}. How can I help you today?`;
     } else {
-      const greetings = [
-        `${timeGreeting}! How can I help you today?`,
-        `${timeGreeting}! I'm a friendly assistant. What can I do for you?`,
-        `Hello there! How can I assist you?`
-      ];
-      return greetings[Math.floor(Math.random() * greetings.length)];
+      return `${greeting} How can I help you today?`;
     }
   }
-
+  
   /**
-   * Generates a response acknowledging provided personal information
-   * @param {Object} semantics - Semantic understanding of the statement
-   * @param {Object} personalContext - Current personal context information
-   * @returns {string} - Appropriate acknowledgement response
+   * Generate an acknowledgement for personal info shared
+   * @param {Object} semantics - The semantic understanding
+   * @param {Object} personalContext - Current personal info
+   * @returns {string} The acknowledgement response
    */
-  generateAcknowledgementResponse(semantics, personalContext = {}) {
-    this.logger.log(`Generating acknowledgement response for semantic entities`);
+  generateAcknowledgementResponse(semantics, personalContext) {
+    if (!semantics) semantics = { original: "" };
     
-    if (!semantics || !semantics.entities) {
-      return "I've noted that information. How can I assist you?";
+    const queryText = semantics.original || "";
+    this.logger.log(`Generating acknowledgement for: ${queryText}`);
+    
+    // Extract what personal info was shared
+    let sharedInfo = null;
+    
+    // Check for name
+    const nameMatch = queryText.match(/my name is\s+([a-zA-Z\s]+)(?:\.|\,|\s|$)/i);
+    if (nameMatch && nameMatch[1]) {
+      sharedInfo = { property: 'name', value: nameMatch[1].trim() };
     }
     
-    // Find person entities with properties
-    const personEntity = semantics.entities.find(entity => 
-      entity.type === 'Person' && entity.properties && Object.keys(entity.properties).length > 0
+    // Check for age
+    const ageMatch = queryText.match(/i am\s+(\d+)(?:\s+years old)?/i);
+    if (ageMatch && ageMatch[1]) {
+      sharedInfo = { property: 'age', value: parseInt(ageMatch[1]) };
+    }
+    
+    // Check for location
+    const locationMatch = queryText.match(/i(?:'m| am) from\s+([a-zA-Z\s,]+)(?:\.|\,|\s|$)/i);
+    if (locationMatch && locationMatch[1]) {
+      sharedInfo = { property: 'location', value: locationMatch[1].trim() };
+    }
+    
+    // If no specific info was found but entities indicate personal info
+    if (!sharedInfo && semantics.entities) {
+      const personEntity = semantics.entities.find(e => e.type === 'Person' && e.properties);
+      if (personEntity && personEntity.properties) {
+        const props = personEntity.properties;
+        if (props.name) {
+          sharedInfo = { property: 'name', value: props.name };
+        } else if (props.age) {
+          sharedInfo = { property: 'age', value: props.age };
+        } else if (props.location) {
+          sharedInfo = { property: 'location', value: props.location };
+        }
+      }
+    }
+    
+    // Generate acknowledgement based on what was shared
+    if (sharedInfo) {
+      switch (sharedInfo.property) {
+        case 'name':
+          return `Nice to meet you, ${sharedInfo.value}! I'll remember your name.`;
+        
+        case 'age':
+          return `I see, you're ${sharedInfo.value} years old. I'll remember that.`;
+        
+        case 'location':
+          return `Thanks for letting me know you're from ${sharedInfo.value}.`;
+        
+        default:
+          return `I've noted that your ${sharedInfo.property} is ${sharedInfo.value}.`;
+      }
+    }
+    
+    // Generic acknowledgement if no specific info identified
+    return "Thanks for sharing that information with me.";
+  }
+  
+  /**
+   * Extract personal info from context
+   * @param {Object} context - The context information
+   * @returns {Object} The extracted personal info
+   */
+  extractPersonalInfo(context) {
+    const personalInfo = {};
+    
+    if (!context || !context.aggregatedKernels) {
+      return personalInfo;
+    }
+    
+    // Find Person kernels in context
+    const personKernels = context.aggregatedKernels.filter(kernel => 
+      kernel && kernel.data && kernel.data.schemaType === 'Person'
     );
     
-    if (!personEntity) {
-      return "I've noted that information. Is there something I can help you with?";
-    }
-    
-    const props = personEntity.properties;
-    
-    // Handle name updates
-    if (props.name) {
-      // Check if this is a new name or confirming existing name
-      const existingName = personalContext.name;
-      if (existingName && existingName.toLowerCase() === props.name.toLowerCase()) {
-        return `Yes, I remember that your name is ${props.name}. How can I help you today?`;
-      } else {
-        // New name or different from what we had
-        const responses = [
-          `Nice to meet you, ${props.name}! How can I help you today?`,
-          `I'll remember that your name is ${props.name}. What can I do for you?`,
-          `Thanks for letting me know your name, ${props.name}. How can I assist you?`
-        ];
-        return responses[Math.floor(Math.random() * responses.length)];
-      }
-    }
-    
-    // Handle age updates
-    if (props.age) {
-      const responses = [
-        `Thanks for letting me know you're ${props.age} years old. Is there something I can help you with?`,
-        `I'll remember that you're ${props.age}. What would you like to know?`,
-        `Got it, you're ${props.age} years old. How can I assist you?`
-      ];
-      return responses[Math.floor(Math.random() * responses.length)];
-    }
-    
-    // Handle location updates
-    if (props.location) {
-      const responses = [
-        `Thanks for letting me know you're from ${props.location}. Is there something I can help you with?`,
-        `I'll remember that you're from ${props.location}. What would you like to know?`,
-        `Got it, you're from ${props.location}. How can I assist you?`
-      ];
-      return responses[Math.floor(Math.random() * responses.length)];
-    }
-    
-    // For any other property
-    const propName = Object.keys(props)[0];
-    if (propName) {
-      return `Thanks for letting me know about your ${propName}. I'll remember that. How can I help you today?`;
-    }
-    
-    return "Thanks for sharing that information with me. Is there something specific you'd like to know?";
-  }
-
-  /**
-   * Main method to formulate a personal response based on context and intent
-   * @param {Object} context - The context information including personal data
-   * @param {string} intent - The identified intent (e.g., 'question', 'inform')
-   * @returns {string} - The formulated personal response
-   */
-  formulatePersonalResponse(context, intent) {
-    this.logger.log(`Formulating personal response for intent: ${intent}`);
-    
-    // Extract relevant personal information from context
-    let personalInfo = null;
-    let userName = null;
-    
-    // Find Person kernels in the context
-    const personKernels = context.aggregatedKernels?.filter(kernel => 
-      kernel.data && kernel.data.schemaType === 'Person'
-    ) || [];
-    
     if (personKernels.length > 0) {
-      // Sort by relevance or recency
-      personKernels.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+      // Get properties from the most relevant Person kernel
+      const personKernel = personKernels[0];
+      const properties = personKernel.data.properties || {};
       
-      // Get the most relevant Person kernel
-      const topPersonKernel = personKernels[0];
-      
-      if (topPersonKernel.data && topPersonKernel.data.properties) {
-        userName = topPersonKernel.data.properties.name;
-        
-        // For personal info questions, extract requested property
-        if (intent === 'question' && context.requestedProperty) {
-          personalInfo = {
-            property: context.requestedProperty,
-            value: topPersonKernel.data.properties[context.requestedProperty],
-            confidence: topPersonKernel.relevanceScore || 0.5
-          };
-        }
-      }
+      // Add all properties to personal info
+      Object.assign(personalInfo, properties);
     }
     
-    // Handle different intents
-    switch (intent) {
-      case 'greet':
-        return this.generateGreetingResponse(context.semantics, userName);
-        
-      case 'question':
-        if (personalInfo) {
-          return this.generatePersonalInfoResponse(personalInfo);
-        } else if (context.requestedProperty) {
-          return `I don't know your ${context.requestedProperty} yet. Would you like to tell me?`;
-        } else {
-          return "I'm not sure I have that personal information about you yet.";
-        }
-        
-      case 'inform':
-        return this.generateAcknowledgementResponse(context.semantics, 
-          personKernels.length > 0 && personKernels[0].data ? personKernels[0].data.properties : {});
-        
-      default:
-        // For other intents, try to personalize based on known information
-        if (userName) {
-          return `I'll try to help with that, ${userName}. Let me think...`;
-        } else {
-          return "I'll try to help with that. Let me think...";
-        }
+    return personalInfo;
+  }
+  
+  /**
+   * Extract the user's name from context if available
+   * @param {Object} context - The context information
+   * @returns {string|null} The user's name or null if not found
+   */
+  extractUserName(context) {
+    const personalInfo = this.extractPersonalInfo(context);
+    return personalInfo.name || null;
+  }
+  
+  /**
+   * Check if query text is asking for personal information
+   * @param {string} queryText - The query text
+   * @returns {boolean} Whether this is a personal info question
+   */
+  isPersonalInfoQuestion(queryText) {
+    if (!queryText) return false;
+    
+    const personalInfoPatterns = [
+      /what(?:'s| is) my name/i,
+      /who am i/i,
+      /how old am i/i,
+      /what(?:'s| is) my age/i,
+      /where (?:am i from|do i live)/i,
+      /what(?:'s| is) my location/i,
+      /tell me about (myself|me)/i
+    ];
+    
+    return personalInfoPatterns.some(pattern => pattern.test(queryText));
+  }
+  
+  /**
+   * Get the primary intent from semantics
+   * @param {Object} semantics - The semantic understanding
+   * @returns {string} The primary intent type
+   */
+  getPrimaryIntent(semantics) {
+    if (!semantics || !semantics.intents || !Array.isArray(semantics.intents) || semantics.intents.length === 0) {
+      return 'unknown';
     }
+    
+    // Sort by confidence and return the highest type
+    const sortedIntents = [...semantics.intents].sort((a, b) => 
+      (b.confidence || 0) - (a.confidence || 0)
+    );
+    
+    return sortedIntents[0].type || 'unknown';
   }
 }
 
