@@ -1,7 +1,6 @@
 // Enhanced uor-cortex.js
-// Improved implementation of UOR Lattice traversal for schema-based knowledge representation
-
-const TOKEN_LIMIT = 1000;  // Define the token limit for context
+// Refactored implementation of UOR Lattice for schema-based knowledge representation
+// with enhanced cognitive capabilities
 
 /**
  * Estimates token count for a string or object
@@ -42,7 +41,8 @@ function summarizeContext(context) {
       data: typeof kernel.data === 'object' 
         ? { summary: `Summary of ${JSON.stringify(kernel.data).substring(0, 100)}...` }
         : `Summary: ${String(kernel.data).substring(0, 100)}...`,
-      isSummarized: true
+      isSummarized: true,
+      cognitiveMetadata: kernel.cognitiveMetadata // Preserve cognitive metadata
     };
   });
   
@@ -53,12 +53,21 @@ function summarizeContext(context) {
 class UORCortex {
   constructor() {
     this.uorGraph = new Map(); // Stores all kernels in a directed acyclic graph (DAG)
+    this.contextKernelRef = null; // Reference to the current context kernel
     this.logger = console; // For logging, could be replaced with a custom logger
+    
+    // Initialize cognitive metadata tracking
+    this.cognitiveMetadata = {
+      lastAccessTime: {}, // Maps kernel references to last access timestamp
+      attentionWeights: {}, // Maps kernel references to attention weights
+      contextRelevance: {}, // Maps kernel references to context relevance scores
+      workingMemoryStatus: {} // Maps kernel references to working memory status
+    };
   }
 
   /**
    * Creates a new kernel (encoded object) in the UOR framework.
-   * Enhanced to better handle schema-typed objects and updates
+   * Enhanced to better handle schema-typed objects, updates, and cognitive metadata
    * @param {Object} objectData - The data representing the object to be encoded.
    * @returns {Object} - The newly created or existing kernel.
    */
@@ -89,6 +98,19 @@ class UORCortex {
           // Preserve relationships
           updatedKernel.relationships = kernel.relationships || [];
           
+          // Preserve and update cognitive metadata
+          updatedKernel.cognitiveMetadata = {
+            ...kernel.cognitiveMetadata,
+            lastAccessed: Date.now(),
+            attentionWeight: 1.0, // Boost attention weight for recent updates
+            isInWorkingMemory: true
+          };
+          
+          // Update the cognitive metadata tracking
+          this.cognitiveMetadata.lastAccessTime[reference] = Date.now();
+          this.cognitiveMetadata.attentionWeights[reference] = 1.0;
+          this.cognitiveMetadata.workingMemoryStatus[reference] = true;
+          
           // Update in the graph
           this.uorGraph.set(reference, updatedKernel);
           
@@ -100,6 +122,18 @@ class UORCortex {
     // Check if the kernel's data already exists in the uorGraph
     for (let [reference, kernel] of this.uorGraph.entries()) {
       if (JSON.stringify(kernel.data) === JSON.stringify(objectData)) {
+        // Update the access time and attention weight
+        this.cognitiveMetadata.lastAccessTime[reference] = Date.now();
+        this.cognitiveMetadata.attentionWeights[reference] = 
+          (this.cognitiveMetadata.attentionWeights[reference] || 0.5) + 0.2;
+        
+        // Update the kernel's cognitive metadata
+        kernel.cognitiveMetadata = {
+          ...kernel.cognitiveMetadata,
+          lastAccessed: Date.now(),
+          attentionWeight: this.cognitiveMetadata.attentionWeights[reference]
+        };
+        
         // Return the existing kernel and its reference
         return { kernelReference: reference, kernel };
       }
@@ -107,6 +141,20 @@ class UORCortex {
 
     // Encode the object data into a kernel
     const kernel = this.encodeObject(objectData);
+    
+    // Initialize cognitive metadata for the new kernel
+    kernel.cognitiveMetadata = {
+      created: Date.now(),
+      lastAccessed: Date.now(),
+      attentionWeight: 0.8, // Start with relatively high attention for new objects
+      isInWorkingMemory: true,
+      contextRelevance: {}
+    };
+    
+    // Update the cognitive metadata tracking
+    this.cognitiveMetadata.lastAccessTime[kernelReference] = Date.now();
+    this.cognitiveMetadata.attentionWeights[kernelReference] = 0.8;
+    this.cognitiveMetadata.workingMemoryStatus[kernelReference] = true;
 
     // Store the kernel in the UOR graph
     this.uorGraph.set(kernelReference, kernel);
@@ -132,7 +180,8 @@ class UORCortex {
       data: objectData,
       encodedRepresentation,
       relationships: [], // Initialize empty relationships array
-      relevanceScore: 0  // Initialize relevance score
+      relevanceScore: 0,  // Initialize relevance score
+      cognitiveMetadata: {} // Initialize empty cognitive metadata
     };
   }
 
@@ -165,12 +214,13 @@ class UORCortex {
 
   /**
    * Links two kernels in the UOR graph, defining their semantic relationship.
-   * Enhanced to better track bidirectional relationships
+   * Enhanced to better track bidirectional relationships and cognitive weights
    * @param {String} kernel1Ref - The reference of the first kernel.
    * @param {String} kernel2Ref - The reference of the second kernel.
    * @param {String} relationship - The relationship between the two kernels.
+   * @param {Object} options - Optional parameters for the link
    */
-  linkObjects(kernel1Ref, kernel2Ref, relationship) {
+  linkObjects(kernel1Ref, kernel2Ref, relationship, options = {}) {
     const kernel1 = this.uorGraph.get(kernel1Ref);
     const kernel2 = this.uorGraph.get(kernel2Ref);
 
@@ -182,7 +232,8 @@ class UORCortex {
     const relationshipData = { 
       targetKernelRef: kernel2Ref, 
       relationshipType: relationship,
-      weight: 1.0 // Default relationship weight
+      weight: options.weight || 1.0, // Default relationship weight with option to override
+      timestamp: Date.now() // Add timestamp to track recency
     };
 
     // Ensure the relationship does not violate coherence norms
@@ -199,6 +250,17 @@ class UORCortex {
       kernel1.relationships.push(relationshipData);
       
       this.logger.log(`Linked ${kernel1Ref} -[${relationship}]-> ${kernel2Ref}`);
+      
+      // Update cognitive metadata - linking increases attention to both kernels
+      this.updateKernelCognitiveMetadata(kernel1Ref, {
+        lastAccessed: Date.now(),
+        attentionWeight: (this.cognitiveMetadata.attentionWeights[kernel1Ref] || 0.5) + 0.1
+      });
+      
+      this.updateKernelCognitiveMetadata(kernel2Ref, {
+        lastAccessed: Date.now(),
+        attentionWeight: (this.cognitiveMetadata.attentionWeights[kernel2Ref] || 0.5) + 0.1
+      });
     }
     
     // For bidirectional relationships, also add the inverse relationship
@@ -221,10 +283,18 @@ class UORCortex {
       kernel2.relationships.push({
         targetKernelRef: kernel1Ref,
         relationshipType: inverseRelationship,
-        weight: 1.0
+        weight: options.inverseWeight || options.weight || 1.0,
+        timestamp: Date.now()
       });
       
       this.logger.log(`Linked ${kernel2Ref} -[${inverseRelationship}]-> ${kernel1Ref}`);
+    }
+    
+    // If either kernel is the context kernel, update context relevance
+    if (kernel1Ref === this.contextKernelRef || kernel2Ref === this.contextKernelRef) {
+      const nonContextRef = kernel1Ref === this.contextKernelRef ? kernel2Ref : kernel1Ref;
+      this.cognitiveMetadata.contextRelevance[nonContextRef] = 
+        (this.cognitiveMetadata.contextRelevance[nonContextRef] || 0.5) + 0.2;
     }
   }
 
@@ -257,6 +327,13 @@ class UORCortex {
             relevanceScore: 0.95 // High relevance for Person kernels in personal queries
           });
           this.logger.log(`Found Person kernel with high relevance: ${reference}`);
+          
+          // Update cognitive metadata for this kernel
+          this.updateKernelCognitiveMetadata(reference, {
+            lastAccessed: Date.now(),
+            attentionWeight: 1.0,
+            isInWorkingMemory: true
+          });
         }
       }
     }
@@ -283,12 +360,23 @@ class UORCortex {
       // Adjust threshold based on query type and kernel count
       const threshold = isGeneralQuery ? 0.01 : 0.1;
       
-      if (relevanceScore > threshold) {
+      // Apply cognitive attention boost
+      const attentionBoost = this.cognitiveMetadata.attentionWeights[reference] || 0;
+      const contextBoost = this.cognitiveMetadata.contextRelevance[reference] || 0;
+      const adjustedRelevanceScore = relevanceScore + (attentionBoost * 0.1) + (contextBoost * 0.2);
+      
+      if (adjustedRelevanceScore > threshold) {
+        // Update access time for this kernel
+        this.updateKernelCognitiveMetadata(reference, {
+          lastAccessed: Date.now(),
+          isInWorkingMemory: true
+        });
+        
         // Create a copy of the kernel with the relevance score
         const kernelWithRelevance = { 
           ...kernel, 
           reference, 
-          relevanceScore 
+          relevanceScore: adjustedRelevanceScore
         };
         relatedKernels.push(kernelWithRelevance);
       }
@@ -298,6 +386,11 @@ class UORCortex {
     if (relatedKernels.length === 0) {
       this.logger.log("[UOR] No directly relevant kernels found, including all kernels with base relevance");
       this.uorGraph.forEach((kernel, reference) => {
+        // Update this kernel's cognitive metadata to note it was considered
+        this.updateKernelCognitiveMetadata(reference, {
+          lastAccessed: Date.now()
+        });
+        
         relatedKernels.push({
           ...kernel,
           reference,
@@ -350,12 +443,13 @@ class UORCortex {
 
   /**
    * Calculates the relevance (similarity) between two kernels.
-   * Enhanced to better handle schema-typed kernels and semantic understanding
+   * Enhanced to better handle schema-typed kernels, semantic understanding, and context
    * @param {Object} kernel1 - The first kernel.
    * @param {Object} kernel2 - The second kernel.
+   * @param {Object} contextInfo - Optional context information to influence relevance
    * @returns {number} - Relevance score between 0 and 1.
    */
-  calculateRelevance(kernel1, kernel2) {
+  calculateRelevance(kernel1, kernel2, contextInfo = {}) {
     // Special handling for schema-typed kernels
     // If kernel1 is a query and kernel2 is a Person kernel
     if (kernel1.data && kernel2.data && kernel2.data.schemaType === 'Person') {
@@ -384,6 +478,22 @@ class UORCortex {
       // If query explicitly mentions the schema type
       if (queryText.toLowerCase().includes(schemaType.toLowerCase())) {
         return 0.8; // High relevance for explicitly mentioned schema types
+      }
+    }
+    
+    // Context-based relevance boost
+    if (contextInfo.contextType === 'personal' && kernel2.data && kernel2.data.schemaType === 'Person') {
+      return 0.9; // Very high relevance for Person kernels in personal context
+    }
+    
+    if (contextInfo.contextKernelRef && kernel2.relationships) {
+      // Check if kernel2 is connected to the context kernel
+      const isConnectedToContext = kernel2.relationships.some(rel => 
+        rel.targetKernelRef === contextInfo.contextKernelRef
+      );
+      
+      if (isConnectedToContext) {
+        return 0.8; // High relevance for kernels connected to current context
       }
     }
     
@@ -490,6 +600,12 @@ class UORCortex {
       }
     }
     
+    // Apply cognitive attention boost if available
+    if (kernel2.reference && this.cognitiveMetadata.attentionWeights[kernel2.reference]) {
+      const attentionBoost = this.cognitiveMetadata.attentionWeights[kernel2.reference] * 0.1;
+      return Math.min(baseRelevance + attentionBoost, 1.0); // Cap at 1.0
+    }
+    
     return baseRelevance;
   }
 
@@ -523,6 +639,11 @@ class UORCortex {
     if (!kernel) {
       throw new Error('Kernel not found');
     }
+    
+    // Update the last access time for this kernel
+    this.updateKernelCognitiveMetadata(kernelReference, {
+      lastAccessed: Date.now()
+    });
 
     return kernel;
   }
@@ -540,11 +661,14 @@ class UORCortex {
 
   /**
    * Traverse the UOR lattice and pack context into layers
-   * Enhanced to better handle schema-typed kernels and personal info
+   * Enhanced to better handle schema-typed kernels, personal info, and cognitive metadata
    * @param {String|Object} queryInput - The initial query string or kernel
+   * @param {Object} options - Optional traversal parameters
    * @returns {Promise<Array>} - The packed context (array of relevant kernels)
    */
-  async traverseUORLattice(queryInput) {
+  async traverseUORLattice(queryInput, options = {}) {
+    const TOKEN_LIMIT = options.tokenLimit || 1000;
+    
     this.logger.log(`[UOR] Starting UOR lattice traversal for query: ${typeof queryInput === 'string' ? queryInput : JSON.stringify(queryInput.data)}`);
     
     // Initialize traversal state
@@ -560,6 +684,17 @@ class UORCortex {
     
     // Check if this is a personal information query
     const isPersonalQuery = this.isPersonalInfoQuery(queryKernel);
+    
+    // Get the current context kernel if it exists
+    const contextKernel = this.findContextKernel();
+    let contextType = contextKernel?.data?.contextType || null;
+    
+    // Create context info for relevance calculation
+    const contextInfo = {
+      contextType: contextType,
+      contextKernelRef: this.contextKernelRef,
+      isPersonalQuery
+    };
     
     // Get initial related kernels based on content similarity
     const initialKernels = this.resolveContent(queryKernel);
@@ -581,6 +716,25 @@ class UORCortex {
       this.logger.log(`[UOR] Prioritized ${personKernels.length} Person kernels for personal query`);
     }
     
+    // If we have working memory filtering enabled, prioritize working memory
+    if (options.useWorkingMemory) {
+      const workingMemoryKernels = this.getWorkingMemorySet();
+      // Reorder traversal queue to prioritize working memory kernels
+      traversalQueue.sort((a, b) => {
+        const aInWorkingMemory = workingMemoryKernels.has(a.reference) ? 1 : 0;
+        const bInWorkingMemory = workingMemoryKernels.has(b.reference) ? 1 : 0;
+        
+        // Primary sort by working memory status
+        if (aInWorkingMemory !== bInWorkingMemory) {
+          return bInWorkingMemory - aInWorkingMemory;
+        }
+        
+        // Secondary sort by relevance score
+        return b.relevanceScore - a.relevanceScore;
+      });
+      this.logger.log(`[UOR] Prioritized working memory kernels in traversal queue`);
+    }
+    
     // Process kernels in the queue using breadth-first traversal
     while (traversalQueue.length > 0 && currentTokenCount < TOKEN_LIMIT) {
       // Get the next kernel with highest relevance
@@ -594,6 +748,13 @@ class UORCortex {
       
       // Mark as visited
       visitedKernelRefs.add(kernelRef);
+      
+      // Update cognitive metadata for this kernel - increase attention as it's being accessed
+      this.updateKernelCognitiveMetadata(kernelRef, {
+        lastAccessed: Date.now(),
+        attentionWeight: (this.cognitiveMetadata.attentionWeights[kernelRef] || 0.5) + 0.1,
+        isInWorkingMemory: true
+      });
       
       // Estimate token count for current kernel
       const kernelTokens = estimateTokenCount(currentKernel.data);
@@ -617,12 +778,22 @@ class UORCortex {
               continue;
             }
             
+            // Skip if the relationship is too old (added optional temporal decay)
+            if (options.temporalDecay && relationship.timestamp) {
+              const age = Date.now() - relationship.timestamp;
+              const maxAge = options.maxRelationshipAge || (24 * 60 * 60 * 1000); // Default 24 hours
+              if (age > maxAge) {
+                this.logger.log(`[UOR] Skipping old relationship to ${relatedKernelRef} (${age}ms old)`);
+                continue;
+              }
+            }
+            
             // Retrieve the related kernel
             try {
               const relatedKernel = this.retrieveObject(relatedKernelRef);
               
               // Calculate relevance to original query
-              const relevanceToQuery = this.calculateRelevance(queryKernel, relatedKernel);
+              const relevanceToQuery = this.calculateRelevance(queryKernel, relatedKernel, contextInfo);
               
               // For personal queries, boost relevance of Person kernels in relationships
               let adjustedRelevance = relevanceToQuery;
@@ -642,12 +813,22 @@ class UORCortex {
                 relationshipBoost = 0.2;
               }
               
-              // Add to traversal queue with relevance to query for prioritization
+              // Apply attention weight boost if kernel is currently attended to
+              const attentionBoost = this.cognitiveMetadata.attentionWeights[relatedKernelRef] || 0;
+              
+              // Apply context relevance boost if kernel is relevant to current context
+              const contextBoost = this.cognitiveMetadata.contextRelevance[relatedKernelRef] || 0;
+              
+              // Add to traversal queue with combined score for prioritization
               traversalQueue.push({ 
                 ...relatedKernel, 
                 reference: relatedKernelRef,
-                // Combine relationship weight with relevance score
-                relevanceScore: (relationship.weight * 0.3) + (adjustedRelevance * 0.7) + relationshipBoost
+                // Combine relationship weight with relevance score, adding boosts
+                relevanceScore: (relationship.weight * 0.3) + 
+                               (adjustedRelevance * 0.5) + 
+                               relationshipBoost + 
+                               (attentionBoost * 0.1) +
+                               (contextBoost * 0.1)
               });
             } catch (error) {
               this.logger.error(`[UOR] Error retrieving related kernel ${relatedKernelRef}: ${error.message}`);
@@ -683,7 +864,112 @@ class UORCortex {
       }
     }
     
+    // Apply decay to attention weights for kernels not included in the traversal
+    this.decayAttentionWeights(Array.from(visitedKernelRefs));
+    
     return context;
+  }
+
+  /**
+   * Decay attention weights for kernels not recently visited
+   * @param {Array} visitedRefs - References of kernels that were just visited
+   * @param {number} decayRate - Rate at which to decay attention (default 0.1)
+   */
+  decayAttentionWeights(visitedRefs, decayRate = 0.1) {
+    // Get all kernel references
+    const allRefs = Array.from(this.uorGraph.keys());
+    
+    // For each kernel not in the visited set, decay its attention weight
+    allRefs.forEach(ref => {
+      if (!visitedRefs.includes(ref)) {
+        const currentWeight = this.cognitiveMetadata.attentionWeights[ref] || 0.5;
+        // Apply decay but ensure it doesn't go below minimum threshold
+        const newWeight = Math.max(0.1, currentWeight - decayRate);
+        this.cognitiveMetadata.attentionWeights[ref] = newWeight;
+        
+        // Update the kernel's cognitive metadata
+        const kernel = this.uorGraph.get(ref);
+        if (kernel && kernel.cognitiveMetadata) {
+          kernel.cognitiveMetadata.attentionWeight = newWeight;
+        }
+      }
+    });
+  }
+
+  /**
+   * Get the set of kernels currently in working memory
+   * @param {number} recencyThreshold - Time threshold in ms (default 5 minutes)
+   * @returns {Set} - Set of kernel references in working memory
+   */
+  getWorkingMemorySet(recencyThreshold = 5 * 60 * 1000) {
+    const workingMemorySet = new Set();
+    const currentTime = Date.now();
+    
+    // Find all kernels accessed within the recency threshold
+    for (const [ref, kernel] of this.uorGraph.entries()) {
+      const lastAccessTime = this.cognitiveMetadata.lastAccessTime[ref] || 0;
+      if (currentTime - lastAccessTime < recencyThreshold) {
+        workingMemorySet.add(ref);
+      }
+    }
+    
+    return workingMemorySet;
+  }
+
+  /**
+   * Update cognitive metadata for a kernel
+   * @param {string} kernelRef - The kernel reference
+   * @param {Object} metadata - The metadata to update
+   */
+  updateKernelCognitiveMetadata(kernelRef, metadata) {
+    // Update the in-memory tracking objects
+    if (metadata.lastAccessed) {
+      this.cognitiveMetadata.lastAccessTime[kernelRef] = metadata.lastAccessed;
+    }
+    
+    if (metadata.attentionWeight !== undefined) {
+      this.cognitiveMetadata.attentionWeights[kernelRef] = metadata.attentionWeight;
+    }
+    
+    if (metadata.isInWorkingMemory !== undefined) {
+      this.cognitiveMetadata.workingMemoryStatus[kernelRef] = metadata.isInWorkingMemory;
+    }
+    
+    // Update the kernel object itself if it exists
+    const kernel = this.uorGraph.get(kernelRef);
+    if (kernel) {
+      kernel.cognitiveMetadata = {
+        ...kernel.cognitiveMetadata || {},
+        ...metadata
+      };
+    }
+  }
+
+  /**
+   * Find the current context kernel, or create one if it doesn't exist
+   * @returns {Object|null} The context kernel or null
+   */
+  findContextKernel() {
+    // If we already have a reference, try to retrieve it
+    if (this.contextKernelRef) {
+      try {
+        return this.retrieveObject(this.contextKernelRef);
+      } catch (error) {
+        this.logger.error(`[UOR] Error retrieving context kernel: ${error.message}`);
+        this.contextKernelRef = null; // Reset if not found
+      }
+    }
+    
+    // Look for any existing context kernel
+    for (const [ref, kernel] of this.uorGraph.entries()) {
+      if (kernel.data && kernel.data.schemaType === 'Context') {
+        this.contextKernelRef = ref;
+        return kernel;
+      }
+    }
+    
+    // No context kernel found, return null
+    return null;
   }
 
   /**
@@ -711,11 +997,18 @@ class UORCortex {
       return (b.relevanceScore || 0) - (a.relevanceScore || 0);
     });
     
-    // Sort regular kernels by relevance
+    // Apply attention weights to regular kernels
+    regularKernels.forEach(kernel => {
+      const ref = kernel.reference;
+      const attentionWeight = this.cognitiveMetadata.attentionWeights[ref] || 0.5;
+      kernel.relevanceScore = (kernel.relevanceScore || 0) * (0.7 + (attentionWeight * 0.3));
+    });
+    
+    // Sort regular kernels by adjusted relevance
     regularKernels.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
     
     // If context is already small enough, return the prioritized list
-    if (estimateTokenCount([...schemaKernels, ...regularKernels]) <= TOKEN_LIMIT / 2) {
+    if (estimateTokenCount([...schemaKernels, ...regularKernels]) <= 1000 / 2) {
       return [...schemaKernels, ...regularKernels];
     }
     
@@ -764,4 +1057,4 @@ class UORCortex {
   }
 }
 
-export default UORCortex; // Default export of the UORCortex class
+export default UORCortex;

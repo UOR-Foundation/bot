@@ -1,10 +1,25 @@
 // bot.js
-// Bot implementation based on UOR framework
+// Refactored Bot implementation based on UOR framework
 // Handles user interaction, knowledge retrieval, and response generation
+// Main orchestration class that coordinates cognitive components
 
-import UORCortex from './uor-cortex.js'; // Import UOR Cortex class to handle knowledge representation
-import { LogicEngine } from './semantics/logic.js'; // Import LogicEngine class
-import SchemaProcessor from './semantics/schema-processor.js'; // Import our new Schema Processor
+import UORCortex from './uor-cortex.js';
+import { LogicEngine } from './semantics/logic.js';
+import SchemaProcessor from './semantics/schema-processor.js';
+
+// Import cognitive components
+import ContextKernel from './cognitive/context-kernel.js';
+import AttentionWeights from './cognitive/attention-weights.js';
+import MemoryTraversal from './cognitive/memory-traversal.js';
+
+// Import response generators
+import ResponseGenerator from './response/response-generator.js';
+import PersonalResponseGenerator from './response/personal-response.js';
+import DomainResponseGenerator from './response/domain-response.js';
+
+// Import utility modules
+import ContextDetection from './utils/context-detection.js';
+import RelevanceCalculator from './utils/relevance-calculator.js';
 
 export default class Bot {
   constructor() {
@@ -12,12 +27,28 @@ export default class Bot {
     this.uorCortex = new UORCortex(); // Initialize the UOR Cortex for knowledge representation
     this.logicEngine = new LogicEngine(); // Initialize the LogicEngine
     this.schemaProcessor = new SchemaProcessor(this.uorCortex); // Initialize the schema processor
+    
+    // Initialize cognitive components
+    this.contextKernel = new ContextKernel(this.uorCortex);
+    this.attentionWeights = new AttentionWeights(this.uorCortex);
+    this.memoryTraversal = new MemoryTraversal(this.uorCortex);
+    this.contextDetection = new ContextDetection();
+    this.relevanceCalculator = new RelevanceCalculator();
+    
+    // Initialize response generators
+    this.responseGenerator = new ResponseGenerator(this.uorCortex);
+    this.personalResponseGenerator = new PersonalResponseGenerator(this.uorCortex);
+    this.domainResponseGenerator = new DomainResponseGenerator(this.uorCortex);
+    
+    // Conversation memory for quick access
     this.conversationMemory = {
       userName: null,
       recentQueries: [],
       personalInfo: {},
-      lastResponse: null
-    }; // Add conversation memory
+      lastResponse: null,
+      currentContext: null
+    };
+    
     this.initBot(); // Initialize the bot after logger is set
   }
 
@@ -26,10 +57,17 @@ export default class Bot {
    * @returns {Promise<void>}
    */
   async initBot() {
-    this.logger.log("Bot initialization complete.");
-    
-    // Add some sample kernels and relationships for testing purposes
-    this.initializeKnowledgeBase();
+    try {
+      // Create or retrieve the context kernel for this conversation
+      await this.contextKernel.createOrRetrieveContextKernel();
+      
+      // Initialize the knowledge base with sample kernels
+      this.initializeKnowledgeBase();
+      
+      this.logger.log("Bot initialization complete with refactored cognitive architecture.");
+    } catch (error) {
+      this.logger.error("Error during bot initialization:", error);
+    }
   }
 
   /**
@@ -71,6 +109,10 @@ export default class Bot {
       this.uorCortex.linkObjects(kernelContextLevels.kernelReference, kernelTraversal.kernelReference, "uses");
       this.uorCortex.linkObjects(kernelUOR.kernelReference, kernelTraversal.kernelReference, "defines");
       
+      // Apply initial attention weights to these foundational kernels
+      this.attentionWeights.applyAttentionToKernel(kernelUOR.kernelReference, 0.8);
+      this.attentionWeights.distributeAttentionAcrossRelationships(kernelUOR.kernelReference);
+      
       this.logger.log("Knowledge base initialized with sample kernels and relationships");
     } catch (error) {
       this.logger.error("Error initializing knowledge base:", error);
@@ -79,7 +121,7 @@ export default class Bot {
 
   /**
    * Handles user input, processes the query, and retrieves relevant knowledge from the UOR framework.
-   * This method performs knowledge resolution and applies logical inference to generate a response.
+   * This method orchestrates cognitive components to generate a response.
    * @param {string} userQuery - The query input from the user.
    * @returns {Promise<string>} - The generated response to the user.
    */
@@ -87,115 +129,58 @@ export default class Bot {
     try {
       this.logger.log(`Processing user query: "${userQuery}"`);
       
-      // Add to recent queries
+      // Update conversation memory with the current query
       this.updateConversationMemory(userQuery);
       
-      // Process query using schema processor
+      // Step 1: Process query using schema processor to extract semantics
       const { queryKernel, semantics, createdKernels } = this.schemaProcessor.processQuery(userQuery);
       
-      // Log semantic understanding
-      this.logger.log(`Semantic understanding: ${semantics.entities.length} entities, ${semantics.intents.length} intents`);
+      // Step 2: Update and detect the context based on semantics
+      await this.contextKernel.updateContext(semantics, userQuery);
+      const currentContext = this.contextKernel.getCurrentContext();
+      this.conversationMemory.currentContext = currentContext;
       
-      // First check if this is a personal information statement
-      if (this.isPersonalInfoStatement(semantics)) {
-        return this.generatePersonalInfoAcknowledgement(semantics);
-      }
-      
-      // Then check if this is a personal information question
+      // Step 3: Determine which traversal strategy to use based on context
+      let packedContext;
       if (this.isPersonalInfoQuestion(semantics)) {
-        const personalInfo = this.schemaProcessor.getPersonalInfoForQuestion(userQuery);
-        if (personalInfo) {
-          return this.generatePersonalInfoResponse(personalInfo);
-        }
+        // Use personal information traversal strategy
+        packedContext = await this.memoryTraversal.getWorkingMemoryContext(queryKernel.kernel, {
+          prioritizeSchemaType: 'Person',
+          recencyWeight: 0.9,
+          contextType: 'personal'
+        });
+      } else if (this.isDomainQuestion(semantics)) {
+        // Use domain knowledge traversal strategy
+        packedContext = await this.memoryTraversal.getWorkingMemoryContext(queryKernel.kernel, {
+          contextType: 'domain',
+          includeRecentConversation: true
+        });
+      } else {
+        // Default traversal strategy
+        packedContext = await this.traverseUORLattice(queryKernel.kernel);
       }
       
-      // Step 2: Traverse the UOR lattice to build a rich context
-      const packedContext = await this.traverseUORLattice(queryKernel.kernel);
-      
-      // Step 3: Apply logical inference to the packed context
+      // Step 4: Apply logical inference to the packed context
       const inferenceResults = this.applyLogicalInference(packedContext);
       
-      // Step 4: Aggregate the context into a higher-level representation
+      // Step 5: Boost attention for the current context
+      this.attentionWeights.boostAttentionForContext(currentContext.type);
+      
+      // Step 6: Aggregate the context into a higher-level representation
       const higherLevelContext = this.aggregateContext(inferenceResults, semantics);
       
-      // Step 5: Generate a response based on the higher-level context
+      // Step 7: Generate a response based on the higher-level context and semantics
       const response = await this.generateResponse(higherLevelContext, semantics);
       
-      // Store the response in memory
+      // Step 8: Store the response in memory and apply temporal decay to attention
       this.conversationMemory.lastResponse = response;
+      this.attentionWeights.decayAttentionOverTime();
       
       return response;
     } catch (error) {
       this.logger.error('Error processing query:', error);
       return 'Sorry, there was an error processing your request.';
     }
-  }
-  
-  /**
-   * Check if the semantics represent a personal information statement
-   * @param {Object} semantics - The semantic understanding of the query
-   * @returns {boolean} - True if this is a personal information statement
-   */
-  isPersonalInfoStatement(semantics) {
-    // Check if there's an inform intent with high confidence
-    const hasInformIntent = semantics.intents.some(intent => 
-      intent.type === 'inform' && intent.confidence > 0.7
-    );
-    
-    if (!hasInformIntent) return false;
-    
-    // Check if there are Person entities with properties
-    const personEntities = semantics.entities.filter(entity => 
-      entity.type === 'Person' && 
-      entity.properties && 
-      Object.keys(entity.properties).length > 0
-    );
-    
-    return personEntities.length > 0;
-  }
-  
-  /**
-   * Generate an acknowledgement response for personal information statements
-   * @param {Object} semantics - The semantic understanding of the statement
-   * @returns {string} - The acknowledgement response
-   */
-  generatePersonalInfoAcknowledgement(semantics) {
-    const personEntity = semantics.entities.find(entity => 
-      entity.type === 'Person' && entity.properties
-    );
-    
-    if (!personEntity || !personEntity.properties) {
-      return "I'm sorry, I didn't catch that personal information.";
-    }
-    
-    const props = personEntity.properties;
-    
-    if (props.name) {
-      // Update conversation memory explicitly
-      this.conversationMemory.userName = props.name;
-      this.conversationMemory.personalInfo.name = props.name;
-      
-      return `Nice to meet you, ${props.name}! I'll remember your name.`;
-    }
-    
-    if (props.age) {
-      this.conversationMemory.personalInfo.age = props.age;
-      return `Thanks for letting me know you're ${props.age} years old. I'll remember that.`;
-    }
-    
-    if (props.location) {
-      this.conversationMemory.personalInfo.location = props.location;
-      return `I see you're from ${props.location}. I'll remember that.`;
-    }
-    
-    // For any other property
-    const propName = Object.keys(props)[0];
-    if (propName) {
-      this.conversationMemory.personalInfo[propName] = props[propName];
-      return `Thanks for letting me know about your ${propName}. I'll remember that.`;
-    }
-    
-    return "Thanks for sharing that information with me. I'll keep that in mind.";
   }
   
   /**
@@ -208,8 +193,6 @@ export default class Bot {
     if (this.conversationMemory.recentQueries.length > 5) {
       this.conversationMemory.recentQueries.pop();
     }
-    
-    // Other memory updates handled by schema processor via kernels
   }
   
   /**
@@ -218,48 +201,16 @@ export default class Bot {
    * @returns {boolean} - True if this is a personal info question
    */
   isPersonalInfoQuestion(semantics) {
-    // Check if there's a question intent
-    const hasQuestionIntent = semantics.intents.some(intent => 
-      intent.type === 'question' && intent.confidence > 0.7
-    );
-    
-    if (!hasQuestionIntent) return false;
-    
-    // Check if there are questions about personal properties
-    const questionEntities = semantics.entities.filter(entity => 
-      entity.type === 'Question' && 
-      entity.properties && 
-      entity.properties.isPersonalQuestion
-    );
-    
-    if (questionEntities.length > 0) return true;
-    
-    // Check if there are personal pronouns in the query
-    const hasPersonalReferences = semantics.original.match(/\b(my|me|i|mine)\b/i);
-    
-    return hasPersonalReferences !== null;
+    return this.contextDetection.hasPersonalContext(semantics);
   }
   
   /**
-   * Generates a response for personal information questions
-   * @param {Object} personalInfo - The personal information found
-   * @returns {string} - The response
+   * Checks if the query is about domain knowledge (UOR, frameworks, etc.)
+   * @param {Object} semantics - The semantic understanding of the query
+   * @returns {boolean} - True if this is a domain question
    */
-  generatePersonalInfoResponse(personalInfo) {
-    if (!personalInfo) {
-      return "I don't have that personal information about you yet.";
-    }
-    
-    switch (personalInfo.property) {
-      case 'name':
-        return `Your name is ${personalInfo.value}.`;
-      case 'age':
-        return `You told me you are ${personalInfo.value} years old.`;
-      case 'location':
-        return `You told me you're from ${personalInfo.value}.`;
-      default:
-        return `I know that your ${personalInfo.property} is ${personalInfo.value}.`;
-    }
+  isDomainQuestion(semantics) {
+    return this.contextDetection.hasDomainContext(semantics);
   }
 
   /**
@@ -333,7 +284,10 @@ export default class Bot {
       aggregatedKernels: higherLevelContext,
       relevantFacts: this.extractRelevantFacts(higherLevelContext),
       keyRelationships: this.extractKeyRelationships(higherLevelContext),
-      semantics: semantics // Include semantic understanding
+      semantics: semantics, // Include semantic understanding
+      currentContext: this.conversationMemory.currentContext,
+      personalInfo: this.conversationMemory.personalInfo,
+      userName: this.conversationMemory.userName
     };
     
     this.logger.log(`Context aggregation complete`);
@@ -424,7 +378,7 @@ export default class Bot {
 
   /**
    * Generates a response based on the higher-level context.
-   * This method applies all the necessary context aggregation and inference before generating the final output.
+   * Delegates to appropriate specialized response generators based on context.
    * @param {Object} higherLevelContext - The structured context for response generation.
    * @param {Object} semantics - The semantic understanding of the query.
    * @returns {Promise<string>} - The response generated by the model.
@@ -432,179 +386,32 @@ export default class Bot {
   async generateResponse(higherLevelContext, semantics) {
     this.logger.log(`Generating response based on higher-level context and semantics`);
     
-    // Get the query text
-    const queryText = higherLevelContext.queryText || '';
+    // Determine the appropriate response strategy based on context
+    const responseStrategy = this.responseGenerator.selectResponseStrategy(semantics, higherLevelContext);
     
-    // Determine the primary intent from semantics
-    const primaryIntent = semantics && semantics.intents.length > 0 
-      ? semantics.intents.sort((a, b) => b.confidence - a.confidence)[0].type
-      : 'unknown';
-      
-    this.logger.log(`Primary intent: ${primaryIntent}`);
-    
-    // Handle different intent types
-    switch (primaryIntent) {
-      case 'greet':
-        return this.generateGreetingResponse(semantics);
+    // Generate the response using the appropriate strategy
+    switch (responseStrategy) {
+      case 'personal':
+        return this.personalResponseGenerator.generatePersonalResponse(higherLevelContext, semantics);
         
-      case 'question':
-        // Double-check for personal information queries (for safety)
-        if (this.isPersonalInfoQuestion(semantics)) {
-          const personalInfo = this.schemaProcessor.getPersonalInfoForQuestion(queryText);
-          if (personalInfo) {
-            return this.generatePersonalInfoResponse(personalInfo);
-          }
-        }
-        // Fall through to standard question handling
-        return this.generateInformationalResponse(higherLevelContext, semantics);
+      case 'domain':
+        return this.domainResponseGenerator.generateDomainResponse(higherLevelContext, semantics);
         
-      case 'inform':
-        // Handle when user is providing information
-        if (this.isPersonalInfoStatement(semantics)) {
-          return this.generatePersonalInfoAcknowledgement(semantics);
-        }
-        return this.generateAcknowledgementResponse(semantics);
+      case 'greeting':
+        return this.personalResponseGenerator.generateGreetingResponse(
+          semantics, 
+          this.conversationMemory.userName
+        );
+        
+      case 'acknowledgement':
+        return this.personalResponseGenerator.generateAcknowledgementResponse(
+          semantics, 
+          this.conversationMemory.personalInfo
+        );
         
       default:
-        // Default to informational response
-        return this.generateInformationalResponse(higherLevelContext, semantics);
-    }
-  }
-  
-  /**
-   * Generates a greeting response
-   * @param {Object} semantics - The semantic understanding of the query
-   * @returns {string} - The greeting response
-   */
-  generateGreetingResponse(semantics) {
-    // Look for a Person entity with a name from previous conversations
-    let knownName = this.conversationMemory.userName;
-    
-    // If no name in memory, try to find it in the UOR graph
-    if (!knownName) {
-      const allKernels = this.uorCortex.getAllKernels();
-      const personKernel = allKernels.find(k => 
-        k.data && k.data.schemaType === 'Person' && 
-        k.data.properties && k.data.properties.name
-      );
-      
-      if (personKernel) {
-        knownName = personKernel.data.properties.name;
-        // Update memory
-        this.conversationMemory.userName = knownName;
-      }
-    }
-    
-    if (knownName) {
-      return `Hello ${knownName}! How can I help you today?`;
-    } else {
-      return "Hello! I'm a friendly assistant. How can I help you today?";
-    }
-  }
-  
-  /**
-   * Generates a response acknowledging provided information
-   * @param {Object} semantics - The semantic understanding of the query
-   * @returns {string} - The acknowledgement response
-   */
-  generateAcknowledgementResponse(semantics) {
-    // Check what information was provided
-    const personEntity = semantics.entities.find(entity => entity.type === 'Person');
-    
-    if (personEntity) {
-      const props = personEntity.properties;
-      
-      if (props.name) {
-        // Update memory
-        this.conversationMemory.userName = props.name;
-        this.conversationMemory.personalInfo.name = props.name;
-        
-        return `Nice to meet you, ${props.name}! How can I help you today?`;
-      }
-      
-      if (props.age) {
-        this.conversationMemory.personalInfo.age = props.age;
-        return `Thanks for letting me know you're ${props.age} years old. Is there something I can help you with?`;
-      }
-      
-      if (props.location) {
-        this.conversationMemory.personalInfo.location = props.location;
-        return `Thanks for letting me know you're from ${props.location}. Is there something I can help you with?`;
-      }
-      
-      return "Thanks for sharing that information with me. Is there something specific you'd like to know?";
-    }
-    
-    return "I've noted that information. How can I assist you?";
-  }
-  
-  /**
-   * Generates an informational response based on knowledge base
-   * @param {Object} higherLevelContext - The structured context
-   * @param {Object} semantics - The semantic understanding of the query
-   * @returns {string} - The informational response
-   */
-  generateInformationalResponse(higherLevelContext, semantics) {
-    const relevantFacts = higherLevelContext.relevantFacts || [];
-    const factCount = relevantFacts.length;
-    
-    // If we have semantically-typed facts about schema entities, use those first
-    const schemaFacts = relevantFacts.filter(fact => fact.schemaType);
-    
-    if (schemaFacts.length > 0) {
-      // Handle schema-based facts specifically
-      const personFacts = schemaFacts.filter(fact => fact.schemaType === 'Person');
-      
-      if (personFacts.length > 0) {
-        // Generate response about person
-        const person = personFacts[0];
-        return `I know that your name is ${person.properties.name || 'unknown'}${
-          person.properties.age ? ` and you are ${person.properties.age} years old` : ''
-        }${
-          person.properties.location ? ` and you're from ${person.properties.location}` : ''
-        }.`;
-      }
-    }
-    
-    // If no relevant facts, provide a friendly response
-    if (factCount === 0) {
-      return "I don't have specific information on that topic yet. Is there something else I can help you with?";
-    } else {
-      // Combine facts into a coherent response with more natural language
-      let response = "";
-      
-      // Get the most relevant facts
-      const mainFacts = relevantFacts
-        .filter(fact => fact.content) // Only include facts with content
-        .slice(0, 2);
-      
-      if (mainFacts.length > 0) {
-        // Use the first fact directly
-        response = mainFacts[0].content + ". ";
-        
-        // Add second fact with a connector
-        if (mainFacts.length > 1) {
-          const connectors = ["Additionally, ", "Also, ", "Furthermore, ", "Moreover, "];
-          const connector = connectors[Math.floor(Math.random() * connectors.length)];
-          response += connector + mainFacts[1].content + ". ";
-        }
-      } else {
-        response = "I can provide some information on that topic. ";
-      }
-      
-      // Add relationship context if available, with more natural phrasing
-      const keyRelationships = higherLevelContext.keyRelationships;
-      if (keyRelationships && keyRelationships.length > 0) {
-        const relationshipPhrases = [
-          `It's worth noting that ${keyRelationships[0].sourceTitle} ${keyRelationships[0].relationship} ${keyRelationships[0].targetTitle}.`,
-          `I should mention that ${keyRelationships[0].sourceTitle} is ${keyRelationships[0].relationship.replace('_', ' ')} ${keyRelationships[0].targetTitle}.`,
-          `Keep in mind that there's a connection between ${keyRelationships[0].sourceTitle} and ${keyRelationships[0].targetTitle}.`
-        ];
-        
-        response += relationshipPhrases[Math.floor(Math.random() * relationshipPhrases.length)];
-      }
-      
-      return response;
+        // Fallback to the main response generator
+        return this.responseGenerator.generateResponse(higherLevelContext, semantics);
     }
   }
 }
