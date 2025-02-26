@@ -343,6 +343,9 @@ class ContextManager {
       // Calculate final score
       return factors > 0 ? score / factors : 0.1;
     }
-  }
-  
-  module.exports = ContextManager;
+}
+
+// Replace the CommonJS exports with ES modules export
+export default ContextManager;
+
+

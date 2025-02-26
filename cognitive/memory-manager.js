@@ -3,7 +3,7 @@
  * Handles memory hierarchy with promotion mechanisms for axioms
  * Works like a CPU cache system with different memory levels
  */
-class MemoryManager {
+export default class MemoryManager {
     constructor(knowledgeGraph, schemaDatabase) {
       this.knowledgeGraph = knowledgeGraph;
       this.schemaDatabase = schemaDatabase;
@@ -604,5 +604,3 @@ class MemoryManager {
       this.logger.log("Working memory cleared");
     }
   }
-  
-  module.exports = MemoryManager;
