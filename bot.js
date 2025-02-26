@@ -90,13 +90,18 @@ export default class Bot {
       // Add to recent queries
       this.updateConversationMemory(userQuery);
       
-      // Process query using schema processor instead of simple conversion
+      // Process query using schema processor
       const { queryKernel, semantics, createdKernels } = this.schemaProcessor.processQuery(userQuery);
       
       // Log semantic understanding
       this.logger.log(`Semantic understanding: ${semantics.entities.length} entities, ${semantics.intents.length} intents`);
       
-      // Check if this is a personal information question before traversing the lattice
+      // First check if this is a personal information statement
+      if (this.isPersonalInfoStatement(semantics)) {
+        return this.generatePersonalInfoAcknowledgement(semantics);
+      }
+      
+      // Then check if this is a personal information question
       if (this.isPersonalInfoQuestion(semantics)) {
         const personalInfo = this.schemaProcessor.getPersonalInfoForQuestion(userQuery);
         if (personalInfo) {
@@ -127,6 +132,73 @@ export default class Bot {
   }
   
   /**
+   * Check if the semantics represent a personal information statement
+   * @param {Object} semantics - The semantic understanding of the query
+   * @returns {boolean} - True if this is a personal information statement
+   */
+  isPersonalInfoStatement(semantics) {
+    // Check if there's an inform intent with high confidence
+    const hasInformIntent = semantics.intents.some(intent => 
+      intent.type === 'inform' && intent.confidence > 0.7
+    );
+    
+    if (!hasInformIntent) return false;
+    
+    // Check if there are Person entities with properties
+    const personEntities = semantics.entities.filter(entity => 
+      entity.type === 'Person' && 
+      entity.properties && 
+      Object.keys(entity.properties).length > 0
+    );
+    
+    return personEntities.length > 0;
+  }
+  
+  /**
+   * Generate an acknowledgement response for personal information statements
+   * @param {Object} semantics - The semantic understanding of the statement
+   * @returns {string} - The acknowledgement response
+   */
+  generatePersonalInfoAcknowledgement(semantics) {
+    const personEntity = semantics.entities.find(entity => 
+      entity.type === 'Person' && entity.properties
+    );
+    
+    if (!personEntity || !personEntity.properties) {
+      return "I'm sorry, I didn't catch that personal information.";
+    }
+    
+    const props = personEntity.properties;
+    
+    if (props.name) {
+      // Update conversation memory explicitly
+      this.conversationMemory.userName = props.name;
+      this.conversationMemory.personalInfo.name = props.name;
+      
+      return `Nice to meet you, ${props.name}! I'll remember your name.`;
+    }
+    
+    if (props.age) {
+      this.conversationMemory.personalInfo.age = props.age;
+      return `Thanks for letting me know you're ${props.age} years old. I'll remember that.`;
+    }
+    
+    if (props.location) {
+      this.conversationMemory.personalInfo.location = props.location;
+      return `I see you're from ${props.location}. I'll remember that.`;
+    }
+    
+    // For any other property
+    const propName = Object.keys(props)[0];
+    if (propName) {
+      this.conversationMemory.personalInfo[propName] = props[propName];
+      return `Thanks for letting me know about your ${propName}. I'll remember that.`;
+    }
+    
+    return "Thanks for sharing that information with me. I'll keep that in mind.";
+  }
+  
+  /**
    * Updates the conversation memory with the current query
    * @param {string} userQuery - The user's query
    */
@@ -152,6 +224,15 @@ export default class Bot {
     );
     
     if (!hasQuestionIntent) return false;
+    
+    // Check if there are questions about personal properties
+    const questionEntities = semantics.entities.filter(entity => 
+      entity.type === 'Question' && 
+      entity.properties && 
+      entity.properties.isPersonalQuestion
+    );
+    
+    if (questionEntities.length > 0) return true;
     
     // Check if there are personal pronouns in the query
     const hasPersonalReferences = semantics.original.match(/\b(my|me|i|mine)\b/i);
@@ -367,7 +448,7 @@ export default class Bot {
         return this.generateGreetingResponse(semantics);
         
       case 'question':
-        // Check for personal information queries again (just to be sure)
+        // Double-check for personal information queries (for safety)
         if (this.isPersonalInfoQuestion(semantics)) {
           const personalInfo = this.schemaProcessor.getPersonalInfoForQuestion(queryText);
           if (personalInfo) {
@@ -379,6 +460,9 @@ export default class Bot {
         
       case 'inform':
         // Handle when user is providing information
+        if (this.isPersonalInfoStatement(semantics)) {
+          return this.generatePersonalInfoAcknowledgement(semantics);
+        }
         return this.generateAcknowledgementResponse(semantics);
         
       default:
@@ -393,15 +477,28 @@ export default class Bot {
    * @returns {string} - The greeting response
    */
   generateGreetingResponse(semantics) {
-    // Look for a Person entity with a name
-    const personEntity = semantics.entities.find(entity => 
-      entity.type === 'Person' && entity.properties && entity.properties.name
-    );
+    // Look for a Person entity with a name from previous conversations
+    let knownName = this.conversationMemory.userName;
     
-    if (personEntity) {
-      return `Hello ${personEntity.properties.name}! I'm a bot based on the UOR framework. How can I help you today?`;
+    // If no name in memory, try to find it in the UOR graph
+    if (!knownName) {
+      const allKernels = this.uorCortex.getAllKernels();
+      const personKernel = allKernels.find(k => 
+        k.data && k.data.schemaType === 'Person' && 
+        k.data.properties && k.data.properties.name
+      );
+      
+      if (personKernel) {
+        knownName = personKernel.data.properties.name;
+        // Update memory
+        this.conversationMemory.userName = knownName;
+      }
+    }
+    
+    if (knownName) {
+      return `Hello ${knownName}! How can I help you today?`;
     } else {
-      return "Hello! I'm a bot based on the UOR (Universal Object Reference) framework. I can help answer questions about hierarchical context systems, token management, and knowledge representation. What would you like to know?";
+      return "Hello! I'm a friendly assistant. How can I help you today?";
     }
   }
   
@@ -418,14 +515,20 @@ export default class Bot {
       const props = personEntity.properties;
       
       if (props.name) {
+        // Update memory
+        this.conversationMemory.userName = props.name;
+        this.conversationMemory.personalInfo.name = props.name;
+        
         return `Nice to meet you, ${props.name}! How can I help you today?`;
       }
       
       if (props.age) {
+        this.conversationMemory.personalInfo.age = props.age;
         return `Thanks for letting me know you're ${props.age} years old. Is there something I can help you with?`;
       }
       
       if (props.location) {
+        this.conversationMemory.personalInfo.location = props.location;
         return `Thanks for letting me know you're from ${props.location}. Is there something I can help you with?`;
       }
       
@@ -463,34 +566,42 @@ export default class Bot {
       }
     }
     
-    // If no relevant schema facts, use domain knowledge
+    // If no relevant facts, provide a friendly response
     if (factCount === 0) {
-      return "I don't have specific information on that topic in my knowledge base. I'm a bot based on the UOR framework, which focuses on hierarchical context management, token limit handling, and knowledge representation through interconnected kernels. Would you like to know more about any of these topics?";
+      return "I don't have specific information on that topic yet. Is there something else I can help you with?";
     } else {
-      // Combine facts into a coherent response
-      let response = `Based on the information in my knowledge base, `;
+      // Combine facts into a coherent response with more natural language
+      let response = "";
       
-      // Add the most relevant facts
+      // Get the most relevant facts
       const mainFacts = relevantFacts
         .filter(fact => fact.content) // Only include facts with content
-        .slice(0, 2)
-        .map(fact => fact.content);
+        .slice(0, 2);
       
       if (mainFacts.length > 0) {
-        response += mainFacts.join('. ') + '. ';
+        // Use the first fact directly
+        response = mainFacts[0].content + ". ";
+        
+        // Add second fact with a connector
+        if (mainFacts.length > 1) {
+          const connectors = ["Additionally, ", "Also, ", "Furthermore, ", "Moreover, "];
+          const connector = connectors[Math.floor(Math.random() * connectors.length)];
+          response += connector + mainFacts[1].content + ". ";
+        }
       } else {
-        response += "I can provide some information on that topic. ";
+        response = "I can provide some information on that topic. ";
       }
       
-      // Add additional context if available
-      if (factCount > 2 && relevantFacts[2].content) {
-        response += `Additionally, ${relevantFacts[2].content}. `;
-      }
-      
-      // Add relationship context if available
+      // Add relationship context if available, with more natural phrasing
       const keyRelationships = higherLevelContext.keyRelationships;
       if (keyRelationships && keyRelationships.length > 0) {
-        response += `It's worth noting that ${keyRelationships[0].sourceTitle} ${keyRelationships[0].relationship} ${keyRelationships[0].targetTitle}.`;
+        const relationshipPhrases = [
+          `It's worth noting that ${keyRelationships[0].sourceTitle} ${keyRelationships[0].relationship} ${keyRelationships[0].targetTitle}.`,
+          `I should mention that ${keyRelationships[0].sourceTitle} is ${keyRelationships[0].relationship.replace('_', ' ')} ${keyRelationships[0].targetTitle}.`,
+          `Keep in mind that there's a connection between ${keyRelationships[0].sourceTitle} and ${keyRelationships[0].targetTitle}.`
+        ];
+        
+        response += relationshipPhrases[Math.floor(Math.random() * relationshipPhrases.length)];
       }
       
       return response;
